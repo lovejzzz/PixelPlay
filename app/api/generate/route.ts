@@ -1,0 +1,519 @@
+import { NextRequest, NextResponse } from "next/server";
+
+export const runtime = "nodejs";
+export const maxDuration = 180;
+
+type AssetType = "character" | "item" | "tile" | "building" | "creature" | "ui";
+type Perspective = "top-down" | "side-view";
+type Pose = "single" | "directions" | "walk-cycle" | "full-sheet";
+type Quality = "low" | "medium" | "high";
+type Size = "1024x1024" | "1024x1536" | "1536x1024";
+type StylePreset = "cozy" | "snes-jrpg" | "gameboy" | "nes" | "monochrome";
+
+const STYLE_PREFIXES: Record<StylePreset, string> = {
+  cozy:
+    "16-bit pixel art game asset in the cozy farming RPG style, " +
+    "hand-drawn pixels, warm pastel color palette, " +
+    "crisp sharp pixels, no anti-aliasing, clean silhouette, ",
+  "snes-jrpg":
+    "16-bit SNES JRPG pixel art, vibrant saturated colors, " +
+    "dramatic outlined silhouettes, classic 1990s console game aesthetic, " +
+    "crisp sharp pixels, no anti-aliasing, ",
+  gameboy:
+    "1989 Game Boy pixel art, strict 4-shade green monochrome palette " +
+    "(very dark green, dark green, light green, lightest green), " +
+    "low-resolution chunky pixels, no color, no anti-aliasing, ",
+  nes:
+    "8-bit NES pixel art, authentic NES color palette with limited colors per sprite, " +
+    "blocky chunky pixels, simple flat shading, no gradients, no anti-aliasing, ",
+  monochrome:
+    "high-contrast black-and-white pixel art, atmospheric ink-like style, " +
+    "no color, crisp sharp pixels, no anti-aliasing, ",
+};
+
+type Body = {
+  prompt: string;
+  assetType?: AssetType;
+  perspective?: Perspective;
+  pose?: Pose;
+  quality?: Quality;
+  variants?: number; // 1..4
+  /** Data URLs (or http URLs) the model should use as visual references. */
+  referenceUrls?: string[];
+  /** Project-level style guidance — appended to the prompt. */
+  projectStyle?: string;
+  /** Visual style preset. Default: "cozy". */
+  stylePreset?: StylePreset;
+  /** Optional inpainting mask — same dimensions as the first reference image. */
+  maskUrl?: string;
+  /** If true, parse the prompt as a scene and generate each item separately. */
+  splitItems?: boolean;
+};
+
+const MAX_SPLIT_ITEMS = 8;
+
+type Layout = {
+  cols: number;
+  rows: number;
+  size: Size;
+  hint: string;
+};
+
+function perspectiveHint(p: Perspective | undefined, assetType?: AssetType) {
+  if (p === "side-view") return "viewed from the side, ";
+  if (assetType === "building") return "three-quarter top-down view, ";
+  if (assetType === "tile") return "strict top-down orthographic view, ";
+  return "top-down view, ";
+}
+
+function typeHint(t?: AssetType) {
+  switch (t) {
+    case "character": return "character sprite, full body, ";
+    case "item":      return "single inventory item, centered, ";
+    case "tile":      return "ground texture covering the entire frame edge to edge with the pattern, no border, no decoration, ";
+    case "building":  return "small building, complete and centered, ";
+    case "creature":  return "one cute small creature, full body, centered, ";
+    case "ui":        return "single UI icon, flat with subtle shading, ";
+    default:          return "";
+  }
+}
+
+function computeLayout(pose: Pose | undefined, perspective: Perspective | undefined): Layout {
+  const sideView = perspective === "side-view";
+  const facingOrder = sideView
+    ? "facing right, then facing left"
+    : "facing south (toward camera), facing north (away from camera), facing west, facing east";
+
+  switch (pose) {
+    case "directions":
+      return sideView
+        ? {
+            cols: 2,
+            rows: 1,
+            size: "1536x1024",
+            hint:
+              "sprite sheet layout: 2 poses arranged in a single horizontal row (cell 1: facing right, cell 2: facing left), evenly spaced with consistent character size, transparent gaps between cells, no grid lines, no labels, no border",
+          }
+        : {
+            cols: 4,
+            rows: 1,
+            size: "1536x1024",
+            hint:
+              `sprite sheet layout: 4 poses arranged in a single horizontal row, each pose showing the character ${facingOrder} respectively, evenly spaced with consistent character size, transparent gaps between cells, no grid lines, no labels, no border`,
+          };
+    case "walk-cycle":
+      return {
+        cols: 4,
+        rows: 1,
+        size: "1536x1024",
+        hint:
+          "sprite sheet layout: 4 successive walk-cycle frames in a single horizontal row, viewed from the same direction, evenly spaced with consistent character size, transparent gaps between cells, no grid lines, no labels, no border",
+      };
+    case "full-sheet":
+      return sideView
+        ? {
+            cols: 4,
+            rows: 2,
+            size: "1536x1024",
+            hint:
+              "sprite sheet layout: 2 rows × 4 columns. Top row: 4-frame walk-cycle facing right. Bottom row: 4-frame walk-cycle facing left. Cells evenly spaced with consistent character size, transparent gaps, no grid lines, no labels, no border",
+          }
+        : {
+            cols: 4,
+            rows: 4,
+            size: "1024x1536",
+            hint:
+              `sprite sheet layout: 4 rows × 4 columns. Each row is the same character ${facingOrder} respectively. Each column is one frame of the walk-cycle. Cells evenly spaced with consistent character size, transparent gaps, no grid lines, no labels, no border`,
+          };
+    case "single":
+    default:
+      return { cols: 1, rows: 1, size: "1024x1024", hint: "" };
+  }
+}
+
+export async function POST(req: NextRequest) {
+  let body: Body;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+  }
+  if (!body.prompt || typeof body.prompt !== "string") {
+    return NextResponse.json({ error: "prompt is required" }, { status: 400 });
+  }
+
+  // Prefer a user-supplied key (Settings modal) over the server-side env var.
+  // This lets the deployed app be used by anyone with their own OpenAI key.
+  const userKey = req.headers.get("x-openai-key")?.trim() || "";
+  const apiKey = userKey || process.env.OPENAI_API_KEY || "";
+  if (!apiKey) {
+    return NextResponse.json(
+      { error: "No OpenAI API key. Open ⚙ Settings and paste your key, or set OPENAI_API_KEY on the server." },
+      { status: 401 }
+    );
+  }
+
+  const perspective: Perspective = body.perspective || "top-down";
+  const pose: Pose = body.assetType === "character" ? body.pose || "single" : "single";
+  const quality: Quality = body.quality || "medium";
+  const variants = Math.min(4, Math.max(1, body.variants ?? 1));
+  const layout = computeLayout(pose, perspective);
+  const opaqueBg = body.assetType === "tile";
+  const bgHint = opaqueBg
+    ? ""
+    : "fully transparent background, no scenery, no floor, no ground, no shadow on the ground, ";
+
+  const styleSuffix = body.projectStyle?.trim() ? `. Project style: ${body.projectStyle.trim()}` : "";
+  const presetPrefix = STYLE_PREFIXES[body.stylePreset || "cozy"] || STYLE_PREFIXES.cozy;
+
+  const fullPrompt =
+    presetPrefix +
+    perspectiveHint(perspective, body.assetType) +
+    typeHint(body.assetType) +
+    bgHint +
+    body.prompt +
+    (layout.hint ? ". " + layout.hint : "") +
+    styleSuffix;
+
+  const provider = (process.env.PROVIDER || "openai").toLowerCase();
+
+  try {
+    // Scene → individual items. Calls a chat model to parse the prompt into
+    // 2-8 items, then generates each as its own asset in parallel. Single-pose
+    // only — multi-frame poses + scene-split would multiply cost catastrophically.
+    if (body.splitItems) {
+      if (provider !== "openai") {
+        return NextResponse.json(
+          { error: "Split items requires PROVIDER=openai" },
+          { status: 400 }
+        );
+      }
+      const items = await extractScene(apiKey, body.prompt);
+      if (items.length === 0) {
+        return NextResponse.json(
+          { error: "Could not parse the scene into items. Try a different prompt." },
+          { status: 400 }
+        );
+      }
+      // Slim prompt for split items — drops assetType-specific framing
+      // (irrelevant when each item could be anything), keeps perspective +
+      // preset + project style + transparency.
+      const splitPerspectiveHint =
+        perspective === "side-view" ? "viewed from the side, " : "top-down view, ";
+      const slimPromptFor = (itemName: string) =>
+        presetPrefix +
+        splitPerspectiveHint +
+        bgHint +
+        "single " +
+        itemName +
+        ", centered, isolated game asset" +
+        styleSuffix;
+
+      // Style-lock: generate the FIRST item synchronously to establish the
+      // scene's visual aesthetic, then use it as a reference image for every
+      // subsequent item (chained in parallel). This costs the same number of
+      // image-gens but trades ~20s of wall-clock for visually consistent
+      // assets across the scene.
+      const fulfilled: Array<{ name: string; url: string }> = [];
+      const failures: Array<{ name: string; error: string }> = [];
+      const baseRefs = body.referenceUrls || [];
+      let styleAnchorUrl: string | null = null;
+      try {
+        const firstUrls = await generateOpenAI(apiKey, {
+          prompt: slimPromptFor(items[0]),
+          size: "1024x1024",
+          opaqueBg: false,
+          quality,
+          variants: 1,
+          referenceUrls: baseRefs,
+        });
+        styleAnchorUrl = firstUrls[0];
+        fulfilled.push({ name: items[0], url: styleAnchorUrl });
+      } catch (err) {
+        failures.push({
+          name: items[0],
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+
+      // Now generate items 2..N in parallel with the style-anchor reference
+      // chained in front of any pre-existing project-style refs.
+      const restRefs = styleAnchorUrl ? [styleAnchorUrl, ...baseRefs] : baseRefs;
+      const restResults = await Promise.allSettled(
+        items.slice(1).map((name) =>
+          generateOpenAI(apiKey, {
+            prompt: slimPromptFor(name),
+            size: "1024x1024",
+            opaqueBg: false,
+            quality,
+            variants: 1,
+            referenceUrls: restRefs,
+          }).then((urls) => ({ name, url: urls[0] }))
+        )
+      );
+      for (let i = 0; i < restResults.length; i++) {
+        const r = restResults[i];
+        if (r.status === "fulfilled") fulfilled.push(r.value);
+        else
+          failures.push({
+            name: items[i + 1],
+            error: r.reason instanceof Error ? r.reason.message : String(r.reason),
+          });
+      }
+
+      if (fulfilled.length === 0) {
+        return NextResponse.json(
+          { error: "All item generations failed", failures },
+          { status: 502 }
+        );
+      }
+
+      return NextResponse.json({
+        items: fulfilled,
+        itemNames: items,
+        failures: failures.length > 0 ? failures : undefined,
+        size: "1024x1024",
+        cols: 1,
+        rows: 1,
+      });
+    }
+
+    let dataUrls: string[];
+    if (provider === "openai") {
+      dataUrls = await generateOpenAI(apiKey, {
+        prompt: fullPrompt,
+        size: layout.size,
+        opaqueBg,
+        quality,
+        variants,
+        referenceUrls: body.referenceUrls || [],
+        maskUrl: body.maskUrl,
+      });
+    } else if (provider === "replicate") {
+      const single = await generateReplicate(fullPrompt);
+      dataUrls = [single];
+    } else {
+      return NextResponse.json({ error: `Unknown PROVIDER: ${provider}` }, { status: 500 });
+    }
+    return NextResponse.json({
+      urls: dataUrls,
+      prompt: fullPrompt,
+      size: layout.size,
+      cols: layout.cols,
+      rows: layout.rows,
+    });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}
+
+// ------------------------------------------------------------- Scene split
+
+async function extractScene(key: string, scenePrompt: string): Promise<string[]> {
+  const sys =
+    "You parse a short scene description into a list of distinct, individually-renderable game-asset items. " +
+    "Each item should be a concrete physical object that can stand alone (a bed, a lamp, a barrel, a small mouse), " +
+    "not abstract concepts (mood, ambience). " +
+    `Return JSON: { "items": ["item 1 short descriptor", ...] }. ` +
+    `Aim for 3-${MAX_SPLIT_ITEMS} items. Each descriptor should be 2-6 words.`;
+
+  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${key}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: process.env.OPENAI_CHAT_MODEL || "gpt-4o-mini",
+      messages: [
+        { role: "system", content: sys },
+        { role: "user", content: scenePrompt },
+      ],
+      response_format: { type: "json_object" },
+      temperature: 0.4,
+    }),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Chat ${res.status}: ${text.slice(0, 300)}`);
+  }
+  const json = (await res.json()) as {
+    choices?: Array<{ message?: { content?: string } }>;
+  };
+  const content = json.choices?.[0]?.message?.content;
+  if (!content) return [];
+  try {
+    const parsed = JSON.parse(content) as { items?: unknown };
+    if (!Array.isArray(parsed.items)) return [];
+    const cleaned = parsed.items
+      .filter((x): x is string => typeof x === "string")
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0 && s.length < 100)
+      .slice(0, MAX_SPLIT_ITEMS);
+    return cleaned;
+  } catch {
+    return [];
+  }
+}
+
+// ------------------------------------------------------------- OpenAI
+
+type OpenAIInput = {
+  prompt: string;
+  size: Size;
+  opaqueBg: boolean;
+  quality: Quality;
+  variants: number;
+  referenceUrls: string[];
+  maskUrl?: string;
+};
+
+async function generateOpenAI(key: string, input: OpenAIInput): Promise<string[]> {
+  const model = process.env.OPENAI_MODEL || "gpt-image-1";
+  const hasRefs = input.referenceUrls.length > 0;
+
+  // With references, we use the edits endpoint (multipart). Without refs,
+  // we use the simpler generations endpoint (JSON).
+  return hasRefs
+    ? await callOpenAIEdits(key, model, input)
+    : await callOpenAIGenerations(key, model, input);
+}
+
+async function callOpenAIGenerations(key: string, model: string, input: OpenAIInput) {
+  const res = await fetch("https://api.openai.com/v1/images/generations", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${key}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model,
+      prompt: input.prompt,
+      n: input.variants,
+      size: input.size,
+      quality: input.quality,
+      output_format: "png",
+      background: input.opaqueBg ? "opaque" : "transparent",
+      moderation: "low",
+    }),
+  });
+  return await parseImageResponse(res);
+}
+
+async function callOpenAIEdits(key: string, model: string, input: OpenAIInput) {
+  const form = new FormData();
+  form.append("model", model);
+  form.append("prompt", input.prompt);
+  form.append("n", String(input.variants));
+  form.append("size", input.size);
+  form.append("quality", input.quality);
+  form.append("output_format", "png");
+  form.append("background", input.opaqueBg ? "opaque" : "transparent");
+  // Note: edits endpoint also accepts `moderation` per docs.
+  form.append("moderation", "low");
+
+  for (let i = 0; i < input.referenceUrls.length; i++) {
+    const blob = await fetchAsBlob(input.referenceUrls[i]);
+    form.append("image[]", blob, `ref-${i}.png`);
+  }
+  if (input.maskUrl) {
+    const maskBlob = await fetchAsBlob(input.maskUrl);
+    form.append("mask", maskBlob, "mask.png");
+  }
+
+  const res = await fetch("https://api.openai.com/v1/images/edits", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${key}` },
+    body: form,
+  });
+  return await parseImageResponse(res);
+}
+
+async function parseImageResponse(res: Response): Promise<string[]> {
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`OpenAI ${res.status}: ${text.slice(0, 500)}`);
+  }
+  const json = (await res.json()) as {
+    data?: Array<{ b64_json?: string; url?: string }>;
+  };
+  const items = json.data || [];
+  if (items.length === 0) throw new Error("OpenAI returned no image data");
+
+  const out: string[] = [];
+  for (const item of items) {
+    if (item.b64_json) {
+      out.push(`data:image/png;base64,${item.b64_json}`);
+    } else if (item.url) {
+      out.push(await urlToDataUrl(item.url));
+    }
+  }
+  if (out.length === 0) throw new Error("OpenAI items had neither b64_json nor url");
+  return out;
+}
+
+async function fetchAsBlob(url: string): Promise<Blob> {
+  if (url.startsWith("data:")) {
+    const [meta, b64] = url.split(",");
+    const mime = /data:([^;]+)/.exec(meta)?.[1] || "image/png";
+    const bin = Buffer.from(b64, "base64");
+    return new Blob([bin], { type: mime });
+  }
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Failed to fetch reference: HTTP ${res.status}`);
+  return await res.blob();
+}
+
+// ------------------------------------------------------------- Replicate
+
+async function generateReplicate(prompt: string): Promise<string> {
+  const token = process.env.REPLICATE_API_TOKEN;
+  if (!token) throw new Error("REPLICATE_API_TOKEN not set. See README.");
+
+  const { default: Replicate } = await import("replicate");
+  const replicate = new Replicate({ auth: token });
+  const model = (process.env.REPLICATE_MODEL ||
+    "bytedance/sdxl-lightning-4step") as `${string}/${string}`;
+
+  const output = await replicate.run(model, {
+    input: {
+      prompt,
+      width: 1024,
+      height: 1024,
+      num_inference_steps: 4,
+      guidance_scale: 0,
+      scheduler: "K_EULER",
+      num_outputs: 1,
+    },
+  });
+
+  const url = await normalizeReplicateOutput(output);
+  if (!url) throw new Error("Replicate returned no image");
+  return await urlToDataUrl(url);
+}
+
+async function normalizeReplicateOutput(output: unknown): Promise<string | null> {
+  if (!output) return null;
+  if (typeof output === "string") return output;
+  if (Array.isArray(output)) {
+    const first = output[0];
+    if (typeof first === "string") return first;
+    if (first && typeof (first as { url?: () => URL }).url === "function") {
+      return (first as { url: () => URL }).url().toString();
+    }
+  }
+  if (typeof (output as { url?: () => URL }).url === "function") {
+    return (output as { url: () => URL }).url().toString();
+  }
+  return null;
+}
+
+async function urlToDataUrl(url: string): Promise<string> {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Failed to fetch image: HTTP ${res.status}`);
+  const buf = Buffer.from(await res.arrayBuffer());
+  const mime = res.headers.get("content-type") || "image/png";
+  return `data:${mime};base64,${buf.toString("base64")}`;
+}

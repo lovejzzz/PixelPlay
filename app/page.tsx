@@ -1,0 +1,5009 @@
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+import { pixelateImageUrl } from "./lib/pixelate";
+import { buildSpriteZip, sliceSheet } from "./lib/sprites";
+import { checkSheetVariety } from "./lib/varietyCheck";
+import { idbGet, idbSet } from "./lib/storage";
+import { makeSeamless } from "./lib/seamless";
+import { MaskPainter } from "./components/MaskPainter";
+import { SceneCanvas, type CanvasAsset } from "./components/SceneCanvas";
+import { ScenePlayer } from "./components/ScenePlayer";
+import JSZip from "jszip";
+import {
+  estimateImageCost,
+  estimateChatCost,
+  recordSpend,
+  getSession,
+  getProjectCost,
+  formatDollars,
+  type SessionState,
+} from "./lib/cost";
+import {
+  applyPalette,
+  extractPalette,
+  BUILT_IN_PALETTES,
+  type Palette,
+  type RGB,
+} from "./lib/palette";
+
+// ----------------------------------------------------------- types
+
+type AssetType = "character" | "item" | "tile" | "building" | "creature" | "ui";
+type Perspective = "top-down" | "side-view";
+type Pose = "single" | "directions" | "walk-cycle" | "full-sheet";
+type Quality = "low" | "medium" | "high";
+type Mode = "generate" | "edit";
+type StylePreset = "cozy" | "snes-jrpg" | "gameboy" | "nes" | "monochrome";
+
+type UserMessage = {
+  role: "user";
+  text: string;
+  assetType: AssetType;
+  perspective: Perspective;
+  pose: Pose;
+  mode: Mode;
+};
+type AssistantMessage = {
+  role: "assistant";
+  text: string;
+  assetIds?: string[];
+  error?: boolean;
+};
+type ChatMessage = UserMessage | AssistantMessage;
+
+type Asset = {
+  id: string;
+  prompt: string;
+  /** Optional user-set name; falls back to prompt for display. */
+  name?: string;
+  /** User-set tags for filtering / organization. */
+  tags?: string[];
+  assetType: AssetType;
+  perspective: Perspective;
+  pose: Pose;
+  rawUrl: string;
+  pixelUrl: string;
+  gridSize: number;
+  sourceSize: string;
+  cols: number;
+  rows: number;
+  editedFrom?: string;
+  createdAt: number;
+  /** Set when a multi-frame sheet's cells came back too similar to be useful. */
+  lowVariety?: boolean;
+};
+
+type ProjectStyle = {
+  text: string;
+  refUrl: string | null;
+  preset: StylePreset;
+};
+
+type SceneItem = {
+  id: string;
+  assetId: string;
+  /** Center point in scene coordinates. */
+  x: number;
+  y: number;
+  /** Fraction of scene's longest edge. 0.2 = item ~204px in a 1024 scene. */
+  scale: number;
+  z: number;
+  /** For multi-frame assets, whether the walk-cycle plays in edit-view. */
+  animating?: boolean;
+  /** When true, blocks the player in Play Mode (collision). */
+  solid?: boolean;
+  /** Mirror horizontally when rendering. */
+  flipX?: boolean;
+  /** Mirror vertically when rendering. */
+  flipY?: boolean;
+  /** Rotation in degrees, clockwise. */
+  rotation?: number;
+  /** Player can pick this up by walking onto it (Play Mode). */
+  pickable?: boolean;
+  /** Door / portal: walking onto this in Play Mode switches the active scene. */
+  linkSceneId?: string;
+  /** NPC patrol — character walks between waypoints in Play Mode. */
+  patrol?: { points: Array<{ x: number; y: number }>; loop: boolean; speed: number };
+  /** Special asset-less item kinds. */
+  kind?: "trigger" | "light" | "emitter" | "sound";
+  /** Message fired into the play-mode log when the player enters a trigger zone. */
+  triggerMessage?: string;
+  /** Point-light parameters (when kind === "light"). */
+  light?: { radius: number; color: string; intensity: number };
+  /** Particle emitter parameters (when kind === "emitter"). */
+  emitter?: { kind: "sparkle" | "smoke"; rate: number; lifetime: number };
+  /** Sound parameters (when kind === "sound"). */
+  sound?: { url: string; volume: number; loop: boolean };
+  /** ID of the prefab this instance was spawned from (or whose master it is). */
+  prefabId?: string;
+  /** ID of the master item inside the prefab.items array this instance maps to. */
+  prefabSourceId?: string;
+};
+
+type TileLayer = {
+  id: string;
+  name: string;
+  tileAssetId: string;
+  cells: Array<{ x: number; y: number }>;
+  visible: boolean;
+};
+type TileGrid = {
+  tileSize: number;
+  layers: TileLayer[];
+};
+
+type Scene = {
+  id: string;
+  name: string;
+  width: number;
+  height: number;
+  /** Optional asset id of a tile to use as repeating background. */
+  backgroundTileId?: string;
+  items: SceneItem[];
+  /** Painted tile layers (Phase-4 tile painting tool). */
+  tileGrid?: TileGrid;
+  /** 0 = midnight, 0.5 = noon, 1 = midnight again. Tints play view. */
+  daytime?: number;
+  createdAt: number;
+};
+
+type Prefab = {
+  id: string;
+  name: string;
+  /** Master items — each instance clones from these. */
+  items: SceneItem[];
+  createdAt: number;
+};
+
+type Project = {
+  id: string;
+  name: string;
+  style: ProjectStyle;
+  assets: Record<string, Asset>;
+  scenes: Record<string, Scene>;
+  prefabs?: Record<string, Prefab>;
+  createdAt: number;
+};
+
+type RightTab = "assets" | "scenes";
+
+// ----------------------------------------------------------- constants
+
+const ASSET_TYPES: { value: AssetType; label: string; emoji: string }[] = [
+  { value: "character", label: "Character", emoji: "🧑‍🌾" },
+  { value: "item", label: "Item", emoji: "🌽" },
+  { value: "tile", label: "Tile", emoji: "🟫" },
+  { value: "building", label: "Building", emoji: "🏠" },
+  { value: "creature", label: "Creature", emoji: "🐔" },
+  { value: "ui", label: "UI Icon", emoji: "🔔" },
+];
+
+const PERSPECTIVES: { value: Perspective; label: string }[] = [
+  { value: "top-down", label: "Top-down" },
+  { value: "side-view", label: "2D side-view" },
+];
+
+const POSES: { value: Pose; label: string; hint: string }[] = [
+  { value: "single", label: "Single", hint: "one pose" },
+  { value: "directions", label: "Directions", hint: "facing N/E/S/W in a row" },
+  { value: "walk-cycle", label: "Walk cycle", hint: "4-frame walk anim" },
+  { value: "full-sheet", label: "Full sheet", hint: "directions × walk frames" },
+];
+
+const QUALITIES: { value: Quality; label: string; cost: string }[] = [
+  { value: "low", label: "Low", cost: "~$0.01" },
+  { value: "medium", label: "Med", cost: "~$0.04" },
+  { value: "high", label: "High", cost: "~$0.16" },
+];
+
+const STYLE_PRESETS: { value: StylePreset; label: string; hint: string }[] = [
+  { value: "cozy", label: "Cozy", hint: "Stardew-like cozy farming RPG" },
+  { value: "snes-jrpg", label: "SNES JRPG", hint: "16-bit Chrono Trigger / FF6 vibe" },
+  { value: "gameboy", label: "GameBoy", hint: "4-shade green monochrome" },
+  { value: "nes", label: "NES", hint: "8-bit blocky pixels, NES palette" },
+  { value: "monochrome", label: "Mono", hint: "high-contrast B&W pixel art" },
+];
+
+const VARIANT_OPTIONS = [1, 2, 4];
+const GRID_PRESETS = [0, 64, 96, 128];
+
+const PROJECTS_IDB_KEY = "projects";
+const CURRENT_ID_IDB_KEY = "currentProjectId";
+/** Map of `projectId → { activeSceneId, selectedSceneItemIds }`. */
+const SCENE_UI_IDB_KEY = "sceneUi";
+const LEGACY_ASSETS_LS_KEY = "pwf:assets:v1";
+const LEGACY_ASSETS_IDB_KEY = "assets";
+const LEGACY_STYLE_LS_KEY = "pwf:project-style:v1";
+
+type SceneUiByProject = Record<
+  string,
+  {
+    activeSceneId: string | null;
+    /** Multi-select. Older sessions may have stored `selectedSceneItemId`. */
+    selectedSceneItemIds?: string[];
+    selectedSceneItemId?: string | null;
+  }
+>;
+
+function gridLabel(g: number) {
+  return g === 0 ? "Raw" : `${g}px`;
+}
+
+function emptyStyle(): ProjectStyle {
+  return { text: "", refUrl: null, preset: "cozy" };
+}
+
+function newProject(name: string): Project {
+  return {
+    id: crypto.randomUUID(),
+    name,
+    style: emptyStyle(),
+    assets: {},
+    scenes: {},
+    createdAt: Date.now(),
+  };
+}
+
+// ----------------------------------------------------------- main
+
+export default function Home() {
+  const [messages, setMessages] = useState<ChatMessage[]>([
+    {
+      role: "assistant",
+      text:
+        "Welcome to Pixel Play. Describe an asset, click ✏️ on an existing one to edit it, or paint a region for inpainting. All assets ship transparent.",
+    },
+  ]);
+  const STARTER_PROMPTS: Array<{
+    label: string;
+    prompt: string;
+    type: AssetType;
+    split?: boolean;
+    auto?: boolean;
+    pose?: Pose;
+    perspective?: Perspective;
+  }> = [
+    { label: "🌽 a magic glowing carrot", prompt: "a magic glowing carrot with sparkles", type: "item" },
+    { label: "🧑‍🌾 farmer walk-cycle", prompt: "a young farmer in overalls and a straw hat", type: "character", pose: "walk-cycle" },
+    { label: "🏠 cozy farmhouse", prompt: "a small cozy farmhouse with a chimney and red roof", type: "building" },
+    { label: "🟫 grass tile", prompt: "lush green grass with tiny flowers", type: "tile" },
+    { label: "🎬 bedroom scene", prompt: "a cozy bedroom with all the furniture", type: "item", split: true, auto: true },
+    { label: "🐔 sleepy chicken", prompt: "a fluffy little chicken sitting", type: "creature" },
+  ];
+
+  const [projects, setProjects] = useState<Record<string, Project>>({});
+  const [currentId, setCurrentId] = useState<string>("");
+
+  const [input, setInput] = useState("");
+  const [assetType, setAssetType] = useState<AssetType>("item");
+  const [perspective, setPerspective] = useState<Perspective>("top-down");
+  const [pose, setPose] = useState<Pose>("single");
+  const [gridSize, setGridSize] = useState(0);
+  const [quality, setQuality] = useState<Quality>("medium");
+  const [variants, setVariants] = useState(1);
+  const [mode, setMode] = useState<Mode>("generate");
+  const [editRefUrl, setEditRefUrl] = useState<string | null>(null);
+  const [editRefName, setEditRefName] = useState<string | null>(null);
+  const [maskUrl, setMaskUrl] = useState<string | null>(null);
+  const [showMaskPainter, setShowMaskPainter] = useState(false);
+  const [styleOpen, setStyleOpen] = useState(false);
+  const [splitItems, setSplitItems] = useState(false);
+  const [autoCompose, setAutoCompose] = useState(true);
+  const [rightTab, setRightTab] = useState<RightTab>("assets");
+  const [activeSceneId, setActiveSceneId] = useState<string | null>(null);
+  const [selectedSceneItemIds, setSelectedSceneItemIds] = useState<string[]>([]);
+  /** Per-scene undo/redo stacks, in-memory only. Capped to 30 entries each. */
+  const [sceneHistory, setSceneHistory] = useState<
+    Record<string, { past: Scene[]; future: Scene[] }>
+  >({});
+  const [replacePrompt, setReplacePrompt] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [hydrated, setHydrated] = useState(false);
+  const [search, setSearch] = useState("");
+  const [activeTags, setActiveTags] = useState<string[]>([]);
+  const [session, setSessionState] = useState<SessionState>({ startedAt: Date.now(), cost: 0, calls: 0 });
+  const [projectLifetime, setProjectLifetime] = useState<{ cost: number; calls: number }>({ cost: 0, calls: 0 });
+  const [draggingAssetId, setDraggingAssetId] = useState<string | null>(null);
+  const [paletteAssetId, setPaletteAssetId] = useState<string | null>(null);
+  const [promptHistory, setPromptHistory] = useState<string[]>([]);
+  const [historyIdx, setHistoryIdx] = useState(-1); // -1 = not navigating
+  const [sceneSnap, setSceneSnap] = useState(0); // 0 / 8 / 16 / 32
+  const [sceneZoom, setSceneZoom] = useState(1); // 1 / 2 / 4
+  const [paintMode, setPaintMode] = useState<"off" | "paint" | "erase">("off");
+  const [activeTileLayerId, setActiveTileLayerId] = useState<string | null>(null);
+  const [playMode, setPlayMode] = useState(false);
+  const [activeCharacterId, setActiveCharacterId] = useState<string | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [openaiKey, setOpenaiKey] = useState("");
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  const currentProject = projects[currentId];
+  const assets = currentProject?.assets || {};
+  const scenes = currentProject?.scenes || {};
+  const projectStyle = currentProject?.style || emptyStyle();
+  const activeScene = activeSceneId ? scenes[activeSceneId] : null;
+  const selectedSceneItem =
+    activeScene && selectedSceneItemIds.length === 1
+      ? activeScene.items.find((it) => it.id === selectedSceneItemIds[0]) || null
+      : null;
+  // Backwards-compat single-id alias for code paths that only handle one selection.
+  const selectedSceneItemId =
+    selectedSceneItemIds.length === 1 ? selectedSceneItemIds[0] : null;
+
+  // ------------- project mutators (operate on current project) -------------
+
+  function setAssets(updater: (a: Record<string, Asset>) => Record<string, Asset>) {
+    setProjects((p) => {
+      const cur = p[currentId];
+      if (!cur) return p;
+      return { ...p, [currentId]: { ...cur, assets: updater(cur.assets) } };
+    });
+  }
+
+  function setProjectStyle(updater: (s: ProjectStyle) => ProjectStyle) {
+    setProjects((p) => {
+      const cur = p[currentId];
+      if (!cur) return p;
+      return { ...p, [currentId]: { ...cur, style: updater(cur.style) } };
+    });
+  }
+
+  function setScenes(updater: (s: Record<string, Scene>) => Record<string, Scene>) {
+    setProjects((p) => {
+      const cur = p[currentId];
+      if (!cur) return p;
+      return { ...p, [currentId]: { ...cur, scenes: updater(cur.scenes || {}) } };
+    });
+  }
+
+  function updateScene(
+    sceneId: string,
+    updater: (s: Scene) => Scene,
+    opts?: { record?: boolean }
+  ) {
+    const record = opts?.record !== false;
+    setScenes((all) => {
+      const s = all[sceneId];
+      if (!s) return all;
+      const next = updater(s);
+      if (next === s) return all;
+      if (record) {
+        setSceneHistory((h) => {
+          const e = h[sceneId] || { past: [], future: [] };
+          return {
+            ...h,
+            [sceneId]: { past: [...e.past, s].slice(-30), future: [] },
+          };
+        });
+      }
+      return { ...all, [sceneId]: next };
+    });
+  }
+
+  function undoScene(sceneId: string) {
+    setSceneHistory((h) => {
+      const e = h[sceneId] || { past: [], future: [] };
+      if (e.past.length === 0) return h;
+      const prev = e.past[e.past.length - 1];
+      const newPast = e.past.slice(0, -1);
+      // Push current to future and restore prev.
+      setScenes((all) => {
+        const cur = all[sceneId];
+        if (!cur) return all;
+        // Defer pushing future via the same effect — we have the snapshot.
+        setSceneHistory((h2) => {
+          const e2 = h2[sceneId] || { past: [], future: [] };
+          return { ...h2, [sceneId]: { past: e2.past, future: [...e2.future, cur].slice(-30) } };
+        });
+        return { ...all, [sceneId]: prev };
+      });
+      return { ...h, [sceneId]: { past: newPast, future: e.future } };
+    });
+  }
+
+  function redoScene(sceneId: string) {
+    setSceneHistory((h) => {
+      const e = h[sceneId] || { past: [], future: [] };
+      if (e.future.length === 0) return h;
+      const next = e.future[e.future.length - 1];
+      const newFuture = e.future.slice(0, -1);
+      setScenes((all) => {
+        const cur = all[sceneId];
+        if (!cur) return all;
+        setSceneHistory((h2) => {
+          const e2 = h2[sceneId] || { past: [], future: [] };
+          return { ...h2, [sceneId]: { past: [...e2.past, cur].slice(-30), future: e2.future } };
+        });
+        return { ...all, [sceneId]: next };
+      });
+      return { ...h, [sceneId]: { past: e.past, future: newFuture } };
+    });
+  }
+
+  function renameCurrentProject(name: string) {
+    setProjects((p) => {
+      const cur = p[currentId];
+      if (!cur) return p;
+      return { ...p, [currentId]: { ...cur, name } };
+    });
+  }
+
+  function createProject(name: string) {
+    const np = newProject(name);
+    setProjects((p) => ({ ...p, [np.id]: np }));
+    setCurrentId(np.id);
+  }
+
+  function deleteCurrentProject() {
+    const remaining = Object.values(projects).filter((p) => p.id !== currentId);
+    if (remaining.length === 0) {
+      // Always keep at least one project. Replace with a fresh empty default.
+      const np = newProject("Default");
+      setProjects({ [np.id]: np });
+      setCurrentId(np.id);
+      return;
+    }
+    setProjects((p) => {
+      const { [currentId]: _drop, ...rest } = p;
+      return rest;
+    });
+    setCurrentId(remaining[0].id);
+  }
+
+  // ------------- hydration + persistence -------------
+
+  // Prompt history (last 30) — recall with up/down arrow on the input.
+  const HISTORY_KEY = "pwf:prompt-history:v1";
+  const MAX_HISTORY = 30;
+  const OPENAI_KEY_LS = "pixelplay:openai-key:v1";
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(HISTORY_KEY);
+      if (raw) {
+        const arr = JSON.parse(raw);
+        if (Array.isArray(arr)) setPromptHistory(arr.slice(0, MAX_HISTORY));
+      }
+      const k = localStorage.getItem(OPENAI_KEY_LS);
+      if (k) setOpenaiKey(k);
+    } catch {}
+  }, []);
+
+  // Helper: build fetch headers including the user-supplied OpenAI key.
+  function authHeaders(): Record<string, string> {
+    const h: Record<string, string> = { "Content-Type": "application/json" };
+    if (openaiKey.trim()) h["x-openai-key"] = openaiKey.trim();
+    return h;
+  }
+  function pushPromptHistory(p: string) {
+    const trimmed = p.trim();
+    if (!trimmed) return;
+    setPromptHistory((cur) => {
+      const next = [trimmed, ...cur.filter((x) => x !== trimmed)].slice(0, MAX_HISTORY);
+      try { localStorage.setItem(HISTORY_KEY, JSON.stringify(next)); } catch {}
+      return next;
+    });
+    setHistoryIdx(-1);
+  }
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const fromIdb = await idbGet<Record<string, Project>>(PROJECTS_IDB_KEY);
+        const savedCurrentId = await idbGet<string>(CURRENT_ID_IDB_KEY);
+
+        if (fromIdb && Object.keys(fromIdb).length > 0) {
+          // Backfill any legacy fields missing on older project records.
+          const upgraded: Record<string, Project> = {};
+          for (const [id, p] of Object.entries(fromIdb)) {
+            upgraded[id] = { ...p, scenes: p.scenes || {} };
+          }
+          setProjects(upgraded);
+          setCurrentId(savedCurrentId && upgraded[savedCurrentId] ? savedCurrentId : Object.keys(upgraded)[0]);
+        } else {
+          // Migrate legacy single-project storage if present.
+          const legacyAssets = await idbGet<Record<string, Asset>>(LEGACY_ASSETS_IDB_KEY);
+          let migratedAssets: Record<string, Asset> | null = legacyAssets || null;
+          if (!migratedAssets) {
+            const legacyLs = localStorage.getItem(LEGACY_ASSETS_LS_KEY);
+            if (legacyLs) {
+              try { migratedAssets = JSON.parse(legacyLs); } catch {}
+            }
+          }
+          let migratedStyle: ProjectStyle = emptyStyle();
+          const legacyStyle = localStorage.getItem(LEGACY_STYLE_LS_KEY);
+          if (legacyStyle) {
+            try {
+              const parsed = JSON.parse(legacyStyle);
+              migratedStyle = { ...emptyStyle(), ...parsed };
+            } catch {}
+          }
+          const np = newProject("Default");
+          np.assets = migratedAssets || {};
+          np.style = migratedStyle;
+          const seeded = { [np.id]: np };
+          setProjects(seeded);
+          setCurrentId(np.id);
+          await idbSet(PROJECTS_IDB_KEY, seeded);
+          await idbSet(CURRENT_ID_IDB_KEY, np.id);
+          // Clean up legacy storage.
+          localStorage.removeItem(LEGACY_ASSETS_LS_KEY);
+          localStorage.removeItem(LEGACY_STYLE_LS_KEY);
+        }
+      } catch {
+        // Storage unavailable — start in-memory with a default project.
+        const np = newProject("Default");
+        setProjects({ [np.id]: np });
+        setCurrentId(np.id);
+      }
+      setHydrated(true);
+    })();
+  }, []);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    idbSet(PROJECTS_IDB_KEY, projects).catch(() => {});
+  }, [projects, hydrated]);
+
+  useEffect(() => {
+    if (!hydrated || !currentId) return;
+    idbSet(CURRENT_ID_IDB_KEY, currentId).catch(() => {});
+  }, [currentId, hydrated]);
+
+  // Restore the active scene + selected item for the current project on
+  // hydration / project switch, then persist any further changes.
+  useEffect(() => {
+    if (!hydrated || !currentId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const map = (await idbGet<SceneUiByProject>(SCENE_UI_IDB_KEY)) || {};
+        if (cancelled) return;
+        const saved = map[currentId];
+        if (saved) {
+          setActiveSceneId(saved.activeSceneId);
+          // Migrate legacy single-id selection to the array form.
+          if (Array.isArray(saved.selectedSceneItemIds)) {
+            setSelectedSceneItemIds(saved.selectedSceneItemIds);
+          } else if (saved.selectedSceneItemId) {
+            setSelectedSceneItemIds([saved.selectedSceneItemId]);
+          } else {
+            setSelectedSceneItemIds([]);
+          }
+        } else {
+          setActiveSceneId(null);
+          setSelectedSceneItemIds([]);
+        }
+      } catch {}
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [hydrated, currentId]);
+
+  useEffect(() => {
+    if (!hydrated || !currentId) return;
+    (async () => {
+      try {
+        const map = (await idbGet<SceneUiByProject>(SCENE_UI_IDB_KEY)) || {};
+        map[currentId] = { activeSceneId, selectedSceneItemIds };
+        await idbSet(SCENE_UI_IDB_KEY, map);
+      } catch {}
+    })();
+  }, [hydrated, currentId, activeSceneId, selectedSceneItemIds]);
+
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+  }, [messages]);
+
+  // Editor-style keyboard shortcuts when the scenes tab is active and an
+  // item is selected. Shortcuts ignore focus-in-input/textarea so users can
+  // still type freely in prompts and tag fields.
+  useEffect(() => {
+    function isEditableTarget(t: EventTarget | null): boolean {
+      if (!(t instanceof HTMLElement)) return false;
+      const tag = t.tagName;
+      return (
+        tag === "INPUT" ||
+        tag === "TEXTAREA" ||
+        tag === "SELECT" ||
+        t.isContentEditable
+      );
+    }
+    function onKey(e: KeyboardEvent) {
+      if (rightTab !== "scenes" || !activeScene) return;
+      if (isEditableTarget(e.target)) return;
+
+      const sel = selectedSceneItem;
+      const step = sceneSnap > 0 ? sceneSnap : 1;
+
+      if (e.key === "Escape") {
+        if (selectedSceneItemIds.length > 0) {
+          e.preventDefault();
+          setSelectedSceneItemIds([]);
+        }
+        return;
+      }
+
+      const ctrl = e.metaKey || e.ctrlKey;
+      // Undo / redo work regardless of selection.
+      if (ctrl && (e.key === "z" || e.key === "Z")) {
+        e.preventDefault();
+        if (e.shiftKey) redoScene(activeScene.id);
+        else undoScene(activeScene.id);
+        return;
+      }
+
+      if (!sel) return;
+      switch (e.key) {
+        case "ArrowLeft":
+          e.preventDefault();
+          moveSceneItem(activeScene.id, sel.id, Math.max(0, sel.x - step), sel.y);
+          return;
+        case "ArrowRight":
+          e.preventDefault();
+          moveSceneItem(activeScene.id, sel.id, Math.min(activeScene.width, sel.x + step), sel.y);
+          return;
+        case "ArrowUp":
+          e.preventDefault();
+          moveSceneItem(activeScene.id, sel.id, sel.x, Math.max(0, sel.y - step));
+          return;
+        case "ArrowDown":
+          e.preventDefault();
+          moveSceneItem(activeScene.id, sel.id, sel.x, Math.min(activeScene.height, sel.y + step));
+          return;
+        case "Backspace":
+        case "Delete":
+          e.preventDefault();
+          deleteSceneItem(activeScene.id, sel.id);
+          return;
+        case "d":
+        case "D":
+          if (ctrl) {
+            e.preventDefault();
+            duplicateSceneItem(activeScene.id, sel.id);
+          }
+          return;
+        case "]":
+          if (ctrl) {
+            e.preventDefault();
+            bumpSceneItemZ(activeScene.id, sel.id, 1);
+          }
+          return;
+        case "[":
+          if (ctrl) {
+            e.preventDefault();
+            bumpSceneItemZ(activeScene.id, sel.id, -1);
+          }
+          return;
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [rightTab, activeScene, selectedSceneItem, selectedSceneItemIds, sceneSnap]);
+
+  // Refresh cost indicators on hydration / project switch.
+  useEffect(() => {
+    if (!hydrated) return;
+    setSessionState(getSession());
+    if (currentId) setProjectLifetime(getProjectCost(currentId));
+  }, [hydrated, currentId]);
+
+  // ------------- handlers -------------
+
+  function clearEditRef() {
+    setEditRefUrl(null);
+    setEditRefName(null);
+    setMaskUrl(null);
+    setShowMaskPainter(false);
+  }
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    const prompt = input.trim();
+    if (!prompt || busy) return;
+    if (mode === "edit" && !editRefUrl) {
+      alert("Edit mode needs a reference image. Pick one from the gallery or upload.");
+      return;
+    }
+
+    setBusy(true);
+    pushPromptHistory(prompt);
+    setInput("");
+    const effectivePose = assetType === "character" ? pose : "single";
+    const isSplit = mode === "generate" && splitItems;
+
+    setMessages((m) => [
+      ...m,
+      { role: "user", text: prompt, assetType, perspective, pose: effectivePose, mode },
+    ]);
+    const verb = isSplit
+      ? "Parsing scene & forging items…"
+      : mode === "edit"
+      ? maskUrl
+        ? "Inpainting…"
+        : "Editing…"
+      : "Forging pixels…";
+    setMessages((m) => [...m, { role: "assistant", text: verb }]);
+
+    const referenceUrls: string[] = [];
+    if (mode === "edit" && editRefUrl) referenceUrls.push(editRefUrl);
+    if (projectStyle.refUrl) referenceUrls.push(projectStyle.refUrl);
+
+    try {
+      const res = await fetch("/api/generate", {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({
+          prompt,
+          assetType,
+          perspective,
+          pose: effectivePose,
+          quality,
+          variants,
+          referenceUrls,
+          projectStyle: projectStyle.text || undefined,
+          stylePreset: projectStyle.preset,
+          maskUrl: mode === "edit" ? maskUrl : undefined,
+          splitItems: isSplit,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+
+      const sourceSize: string = data.size || "1024x1024";
+      const cols: number = data.cols || 1;
+      const rows: number = data.rows || 1;
+      const editedFromId =
+        mode === "edit"
+          ? Object.values(assets).find((a) => a.rawUrl === editRefUrl)?.id
+          : undefined;
+
+      // Split-items returns { items: [{name, url}, ...] }; otherwise { urls: [...] }.
+      const generated: Array<{ name: string; url: string }> = isSplit
+        ? (data.items as Array<{ name: string; url: string }>) || []
+        : ((data.urls as string[]) || []).map((url: string) => ({ name: prompt, url }));
+
+      const newIds: string[] = [];
+      const updates: Record<string, Asset> = {};
+      for (const { name, url } of generated) {
+        const pixelUrl = await applyPixelate(url, gridSize, sourceSize);
+        const id = crypto.randomUUID();
+        updates[id] = {
+          id,
+          prompt: name,
+          assetType,
+          perspective,
+          pose: effectivePose,
+          rawUrl: url,
+          pixelUrl,
+          gridSize,
+          sourceSize,
+          cols,
+          rows,
+          editedFrom: editedFromId,
+          createdAt: Date.now(),
+        };
+        newIds.push(id);
+      }
+      setAssets((a) => ({ ...a, ...updates }));
+
+      // Variety check for multi-frame sheets: gpt-image-1 sometimes returns a
+      // grid where every cell is near-identical. Flag those so the UI can
+      // suggest regeneration instead of silently using a useless sheet.
+      if (cols * rows > 1) {
+        for (const [id, asset] of Object.entries(updates)) {
+          checkSheetVariety(asset.rawUrl, cols, rows)
+            .then((res) => {
+              if (!res.varied) {
+                setAssets((a) =>
+                  a[id] ? { ...a, [id]: { ...a[id], lowVariety: true } } : a
+                );
+              }
+            })
+            .catch(() => {});
+        }
+      }
+
+      // Cost tracking: count chat parse(s) + each image generation.
+      const sourceSizeForCost = (data.size || "1024x1024") as
+        | "1024x1024"
+        | "1024x1536"
+        | "1536x1024";
+      let spend = 0;
+      let calls = 0;
+      if (isSplit) {
+        spend += estimateChatCost(); // scene parser
+        calls += 1;
+        for (let i = 0; i < newIds.length; i++) {
+          spend += estimateImageCost(quality, "1024x1024", 1);
+          calls += 1;
+        }
+      } else {
+        spend += estimateImageCost(quality, sourceSizeForCost, newIds.length);
+        calls += 1;
+      }
+      const tier = isSplit
+        ? (quality as "low" | "medium" | "high")
+        : (quality as "low" | "medium" | "high");
+      const rec = recordSpend(currentId, spend, calls, tier);
+      setSessionState(rec.session);
+      setProjectLifetime(rec.project);
+
+      // Auto-compose scene from split-items result.
+      if (isSplit && autoCompose && newIds.length > 1) {
+        await composeSceneFromAssets(prompt, newIds, updates);
+        // Layout call adds one more chat call.
+        const sceneRec = recordSpend(currentId, estimateChatCost(), 1, "chat");
+        setSessionState(sceneRec.session);
+        setProjectLifetime(sceneRec.project);
+      }
+
+      const sceneSuffix =
+        isSplit && autoCompose && newIds.length > 1 ? ` — composed into 🎬 Scenes` : "";
+      const verbDone = isSplit
+        ? `Forged ${newIds.length} item${newIds.length > 1 ? "s" : ""}: ${generated
+            .map((g) => g.name)
+            .join(", ")}${sceneSuffix}`
+        : (() => {
+            const v = mode === "edit" ? (maskUrl ? "Inpainted" : "Edited") : "Forged";
+            const variantsLabel = newIds.length > 1 ? ` × ${newIds.length}` : "";
+            const poseLabel = effectivePose !== "single" ? ` (${effectivePose})` : "";
+            return `${v} ${assetType}${poseLabel}${variantsLabel} — ${quality}, ${gridLabel(gridSize)}.`;
+          })();
+      const failures = (data.failures as Array<{ name: string; error: string }> | undefined) || [];
+      const failureNote =
+        failures.length > 0
+          ? `\n⚠ ${failures.length} item${failures.length > 1 ? "s" : ""} failed: ${failures
+              .map((f) => f.name)
+              .join(", ")}`
+          : "";
+      setMessages((m) => {
+        const copy = [...m];
+        copy[copy.length - 1] = {
+          role: "assistant",
+          text: verbDone + failureNote,
+          assetIds: newIds,
+        };
+        return copy;
+      });
+      if (maskUrl) {
+        setMaskUrl(null);
+        setShowMaskPainter(false);
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Unknown error";
+      setMessages((m) => {
+        const copy = [...m];
+        copy[copy.length - 1] = { role: "assistant", text: `Error: ${msg}`, error: true };
+        return copy;
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // ------------- scene composition -------------
+
+  async function composeSceneFromAssets(
+    sceneName: string,
+    assetIds: string[],
+    fresh: Record<string, Asset>
+  ) {
+    const items = assetIds.map((id) => fresh[id]?.prompt || "item");
+    let layout: Array<{ name: string; x: number; y: number; scale: number; z: number }> = [];
+    try {
+      const res = await fetch("/api/scene-layout", {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({
+          sceneDescription: sceneName,
+          items,
+          width: 1024,
+          height: 1024,
+        }),
+      });
+      const data = await res.json();
+      layout = data.items || [];
+    } catch {
+      // heuristic fallback handled server-side; if even that failed, do it here
+      layout = items.map((name, i) => ({
+        name,
+        x: 200 + (i % 4) * 200,
+        y: 200 + Math.floor(i / 4) * 200,
+        scale: 0.2,
+        z: i,
+      }));
+    }
+
+    const sceneItems: SceneItem[] = assetIds.map((assetId, i) => {
+      const placement = layout[i] || layout.find((p) => p.name === fresh[assetId]?.prompt);
+      const asset = fresh[assetId];
+      const isMultiFrame = (asset.cols || 1) * (asset.rows || 1) > 1;
+      return {
+        id: crypto.randomUUID(),
+        assetId,
+        x: placement?.x ?? 512,
+        y: placement?.y ?? 512,
+        scale: placement?.scale ?? 0.2,
+        z: placement?.z ?? i,
+        animating: isMultiFrame,
+        solid: defaultSolid(asset.assetType),
+      };
+    });
+
+    const scene: Scene = {
+      id: crypto.randomUUID(),
+      name: sceneName,
+      width: 1024,
+      height: 1024,
+      items: sceneItems,
+      createdAt: Date.now(),
+    };
+
+    setScenes((s) => ({ ...s, [scene.id]: scene }));
+    setActiveSceneId(scene.id);
+    setRightTab("scenes");
+    setSelectedSceneItemIds([]);
+  }
+
+  function addAssetToScene(sceneId: string, assetId: string, x: number, y: number) {
+    const a = assets[assetId];
+    if (!a) return;
+    updateScene(sceneId, (s) => {
+      const maxZ = s.items.reduce((m, it) => Math.max(m, it.z), 0);
+      const isMultiFrame = (a.cols || 1) * (a.rows || 1) > 1;
+      const newItem: SceneItem = {
+        id: crypto.randomUUID(),
+        assetId,
+        x,
+        y,
+        scale: 0.2,
+        z: maxZ + 1,
+        animating: isMultiFrame,
+        solid: defaultSolid(a.assetType),
+      };
+      return { ...s, items: [...s.items, newItem] };
+    });
+  }
+
+  function toggleSceneItemSolid(sceneId: string, itemId: string) {
+    updateScene(sceneId, (s) => ({
+      ...s,
+      items: s.items.map((it) => (it.id === itemId ? { ...it, solid: !it.solid } : it)),
+    }));
+  }
+
+  function toggleSceneItemFlipX(sceneId: string, itemId: string) {
+    updateScene(sceneId, (s) => ({
+      ...s,
+      items: s.items.map((it) => (it.id === itemId ? { ...it, flipX: !it.flipX } : it)),
+    }));
+  }
+
+  function toggleSceneItemFlipY(sceneId: string, itemId: string) {
+    updateScene(sceneId, (s) => ({
+      ...s,
+      items: s.items.map((it) => (it.id === itemId ? { ...it, flipY: !it.flipY } : it)),
+    }));
+  }
+
+  function toggleSceneItemPickable(sceneId: string, itemId: string) {
+    updateScene(sceneId, (s) => ({
+      ...s,
+      items: s.items.map((it) => (it.id === itemId ? { ...it, pickable: !it.pickable } : it)),
+    }));
+  }
+
+  function setSceneItemLinkScene(sceneId: string, itemId: string, linkSceneId: string | undefined) {
+    updateScene(sceneId, (s) => ({
+      ...s,
+      items: s.items.map((it) =>
+        it.id === itemId ? { ...it, linkSceneId: linkSceneId || undefined } : it
+      ),
+    }));
+  }
+
+  function setSceneItemPatrol(
+    sceneId: string,
+    itemId: string,
+    patrol: SceneItem["patrol"]
+  ) {
+    updateScene(sceneId, (s) => ({
+      ...s,
+      items: s.items.map((it) => (it.id === itemId ? { ...it, patrol } : it)),
+    }));
+  }
+
+  function setSceneItemTriggerMessage(sceneId: string, itemId: string, msg: string) {
+    updateScene(sceneId, (s) => ({
+      ...s,
+      items: s.items.map((it) =>
+        it.id === itemId ? { ...it, triggerMessage: msg } : it
+      ),
+    }));
+  }
+
+  // ------------- tile-grid mutators ------------------------------------
+
+  function ensureTileGrid(s: Scene): TileGrid {
+    if (s.tileGrid) return s.tileGrid;
+    return { tileSize: 32, layers: [] };
+  }
+
+  function addTileLayer(sceneId: string, tileAssetId?: string) {
+    updateScene(sceneId, (s) => {
+      const tg = ensureTileGrid(s);
+      const layer: TileLayer = {
+        id: crypto.randomUUID(),
+        name: `Layer ${tg.layers.length + 1}`,
+        tileAssetId: tileAssetId || "",
+        cells: [],
+        visible: true,
+      };
+      return { ...s, tileGrid: { ...tg, layers: [...tg.layers, layer] } };
+    });
+  }
+
+  function removeTileLayer(sceneId: string, layerId: string) {
+    updateScene(sceneId, (s) => {
+      if (!s.tileGrid) return s;
+      const layers = s.tileGrid.layers.filter((l) => l.id !== layerId);
+      return { ...s, tileGrid: { ...s.tileGrid, layers } };
+    });
+  }
+
+  function renameTileLayer(sceneId: string, layerId: string, name: string) {
+    updateScene(sceneId, (s) => {
+      if (!s.tileGrid) return s;
+      const layers = s.tileGrid.layers.map((l) =>
+        l.id === layerId ? { ...l, name } : l
+      );
+      return { ...s, tileGrid: { ...s.tileGrid, layers } };
+    });
+  }
+
+  function setLayerTileAsset(sceneId: string, layerId: string, tileAssetId: string) {
+    updateScene(sceneId, (s) => {
+      if (!s.tileGrid) return s;
+      const layers = s.tileGrid.layers.map((l) =>
+        l.id === layerId ? { ...l, tileAssetId } : l
+      );
+      return { ...s, tileGrid: { ...s.tileGrid, layers } };
+    });
+  }
+
+  function toggleLayerVisible(sceneId: string, layerId: string) {
+    updateScene(sceneId, (s) => {
+      if (!s.tileGrid) return s;
+      const layers = s.tileGrid.layers.map((l) =>
+        l.id === layerId ? { ...l, visible: !l.visible } : l
+      );
+      return { ...s, tileGrid: { ...s.tileGrid, layers } };
+    });
+  }
+
+  function reorderTileLayers(sceneId: string, fromIdx: number, toIdx: number) {
+    updateScene(sceneId, (s) => {
+      if (!s.tileGrid) return s;
+      const layers = [...s.tileGrid.layers];
+      if (fromIdx < 0 || fromIdx >= layers.length || toIdx < 0 || toIdx >= layers.length) return s;
+      const [moved] = layers.splice(fromIdx, 1);
+      layers.splice(toIdx, 0, moved);
+      return { ...s, tileGrid: { ...s.tileGrid, layers } };
+    });
+  }
+
+  function paintTileCell(sceneId: string, layerId: string, x: number, y: number) {
+    updateScene(sceneId, (s) => {
+      if (!s.tileGrid) return s;
+      const layers = s.tileGrid.layers.map((l) => {
+        if (l.id !== layerId) return l;
+        if (l.cells.some((c) => c.x === x && c.y === y)) return l;
+        return { ...l, cells: [...l.cells, { x, y }] };
+      });
+      return { ...s, tileGrid: { ...s.tileGrid, layers } };
+    });
+  }
+
+  function eraseTileCell(sceneId: string, layerId: string, x: number, y: number) {
+    updateScene(sceneId, (s) => {
+      if (!s.tileGrid) return s;
+      const layers = s.tileGrid.layers.map((l) => {
+        if (l.id !== layerId) return l;
+        const filtered = l.cells.filter((c) => !(c.x === x && c.y === y));
+        if (filtered.length === l.cells.length) return l;
+        return { ...l, cells: filtered };
+      });
+      return { ...s, tileGrid: { ...s.tileGrid, layers } };
+    });
+  }
+
+  // ------------- prefab mutators ----------------------------------------
+
+  function savePrefab(name: string, sourceItems: SceneItem[]) {
+    if (sourceItems.length === 0 || !currentId) return;
+    const prefabId = crypto.randomUUID();
+    const items: SceneItem[] = sourceItems.map((it) => {
+      // Each master item gets a stable internal id (different from the scene
+      // instance id so future regenerations don't collide).
+      const sourceId = crypto.randomUUID();
+      return { ...it, id: sourceId, prefabId, prefabSourceId: sourceId };
+    });
+    const prefab: Prefab = { id: prefabId, name, items, createdAt: Date.now() };
+    setProjects((p) => {
+      const cur = p[currentId];
+      if (!cur) return p;
+      const prefabs = { ...(cur.prefabs || {}), [prefabId]: prefab };
+      return { ...p, [currentId]: { ...cur, prefabs } };
+    });
+  }
+
+  function deletePrefab(prefabId: string) {
+    setProjects((p) => {
+      const cur = p[currentId];
+      if (!cur || !cur.prefabs) return p;
+      const { [prefabId]: _drop, ...rest } = cur.prefabs;
+      return { ...p, [currentId]: { ...cur, prefabs: rest } };
+    });
+  }
+
+  function instantiatePrefab(sceneId: string, prefabId: string, dropX: number, dropY: number) {
+    const cur = projects[currentId];
+    const prefab = cur?.prefabs?.[prefabId];
+    if (!prefab) return;
+    // Center the prefab's bbox on the drop point.
+    const xs = prefab.items.map((it) => it.x);
+    const ys = prefab.items.map((it) => it.y);
+    const cx = xs.reduce((a, b) => a + b, 0) / xs.length;
+    const cy = ys.reduce((a, b) => a + b, 0) / ys.length;
+    const dx = dropX - cx;
+    const dy = dropY - cy;
+    updateScene(sceneId, (s) => {
+      const maxZ = s.items.reduce((m, it) => Math.max(m, it.z), 0);
+      const newItems: SceneItem[] = prefab.items.map((master, i) => ({
+        ...master,
+        id: crypto.randomUUID(),
+        x: master.x + dx,
+        y: master.y + dy,
+        z: maxZ + 1 + i,
+        prefabId: prefab.id,
+        prefabSourceId: master.id,
+      }));
+      return { ...s, items: [...s.items, ...newItems] };
+    });
+  }
+
+  /** Pull non-position fields from a prefab master into all instances. */
+  function syncPrefabInstances(prefabId: string) {
+    const cur = projects[currentId];
+    const prefab = cur?.prefabs?.[prefabId];
+    if (!prefab) return;
+    const masterById = new Map(prefab.items.map((m) => [m.id, m]));
+    setProjects((p) => {
+      const c = p[currentId];
+      if (!c) return p;
+      const newScenes: Record<string, Scene> = {};
+      for (const [sid, scene] of Object.entries(c.scenes)) {
+        let mutated = false;
+        const newItems = scene.items.map((it) => {
+          if (it.prefabId !== prefabId || !it.prefabSourceId) return it;
+          const master = masterById.get(it.prefabSourceId);
+          if (!master) return it;
+          mutated = true;
+          // Keep position, z, and id; pull everything else from master.
+          return {
+            ...master,
+            id: it.id,
+            x: it.x,
+            y: it.y,
+            z: it.z,
+            prefabId,
+            prefabSourceId: it.prefabSourceId,
+          };
+        });
+        newScenes[sid] = mutated ? { ...scene, items: newItems } : scene;
+      }
+      return { ...p, [currentId]: { ...c, scenes: newScenes } };
+    });
+  }
+
+  function setTileSize(sceneId: string, tileSize: number) {
+    updateScene(sceneId, (s) => {
+      const tg = ensureTileGrid(s);
+      return { ...s, tileGrid: { ...tg, tileSize } };
+    });
+  }
+
+  function addPointLight(sceneId: string) {
+    updateScene(sceneId, (s) => {
+      const maxZ = s.items.reduce((m, it) => Math.max(m, it.z), 0);
+      const item: SceneItem = {
+        id: crypto.randomUUID(),
+        assetId: "",
+        x: s.width / 2,
+        y: s.height / 2,
+        scale: 0.18,
+        z: maxZ + 1,
+        kind: "light",
+        light: { radius: 200, color: "#ffd47a", intensity: 0.7 },
+      };
+      return { ...s, items: [...s.items, item] };
+    });
+  }
+
+  function setSceneItemLight(sceneId: string, itemId: string, light: SceneItem["light"]) {
+    updateScene(sceneId, (s) => ({
+      ...s,
+      items: s.items.map((it) => (it.id === itemId ? { ...it, light } : it)),
+    }));
+  }
+
+  function addParticleEmitter(sceneId: string) {
+    updateScene(sceneId, (s) => {
+      const maxZ = s.items.reduce((m, it) => Math.max(m, it.z), 0);
+      const item: SceneItem = {
+        id: crypto.randomUUID(),
+        assetId: "",
+        x: s.width / 2,
+        y: s.height / 2,
+        scale: 0.12,
+        z: maxZ + 1,
+        kind: "emitter",
+        emitter: { kind: "sparkle", rate: 4, lifetime: 1.5 },
+      };
+      return { ...s, items: [...s.items, item] };
+    });
+  }
+
+  function setSceneItemEmitter(sceneId: string, itemId: string, emitter: SceneItem["emitter"]) {
+    updateScene(sceneId, (s) => ({
+      ...s,
+      items: s.items.map((it) => (it.id === itemId ? { ...it, emitter } : it)),
+    }));
+  }
+
+  function addSoundTrigger(sceneId: string) {
+    updateScene(sceneId, (s) => {
+      const maxZ = s.items.reduce((m, it) => Math.max(m, it.z), 0);
+      const item: SceneItem = {
+        id: crypto.randomUUID(),
+        assetId: "",
+        x: s.width / 2,
+        y: s.height / 2,
+        scale: 0.15,
+        z: maxZ + 1,
+        kind: "sound",
+        sound: { url: "", volume: 0.6, loop: false },
+      };
+      return { ...s, items: [...s.items, item] };
+    });
+  }
+
+  function setSceneItemSound(sceneId: string, itemId: string, sound: SceneItem["sound"]) {
+    updateScene(sceneId, (s) => ({
+      ...s,
+      items: s.items.map((it) => (it.id === itemId ? { ...it, sound } : it)),
+    }));
+  }
+
+  function setSceneDaytime(sceneId: string, daytime: number) {
+    updateScene(sceneId, (s) => ({ ...s, daytime }), { record: false });
+  }
+
+  function addTriggerZone(sceneId: string) {
+    updateScene(sceneId, (s) => {
+      const maxZ = s.items.reduce((m, it) => Math.max(m, it.z), 0);
+      const item: SceneItem = {
+        id: crypto.randomUUID(),
+        // Trigger zones don't render an asset, but we keep an empty assetId
+        // for type compatibility — the kind/triggerMessage flag is what matters.
+        assetId: "",
+        x: s.width / 2,
+        y: s.height / 2,
+        scale: 0.18,
+        z: maxZ + 1,
+        kind: "trigger",
+        triggerMessage: "Hello!",
+      };
+      return { ...s, items: [...s.items, item] };
+    });
+  }
+
+  function clearSceneBackground(sceneId: string) {
+    updateScene(sceneId, (s) => ({ ...s, backgroundTileId: undefined }));
+  }
+
+  function setSceneItemPos(sceneId: string, itemId: string, x: number, y: number) {
+    // Skip history — position writebacks from Play Mode fire frequently and
+    // shouldn't blow out the undo stack.
+    updateScene(
+      sceneId,
+      (s) => ({
+        ...s,
+        items: s.items.map((it) => (it.id === itemId ? { ...it, x, y } : it)),
+      }),
+      { record: false }
+    );
+  }
+
+  function rotateSceneItem(sceneId: string, itemId: string, deg: number) {
+    updateScene(sceneId, (s) => ({
+      ...s,
+      items: s.items.map((it) =>
+        it.id === itemId ? { ...it, rotation: deg } : it
+      ),
+    }));
+  }
+
+  function moveSceneItems(
+    sceneId: string,
+    updates: Array<{ id: string; x: number; y: number }>
+  ) {
+    const map = new Map(updates.map((u) => [u.id, u]));
+    updateScene(sceneId, (s) => ({
+      ...s,
+      items: s.items.map((it) => {
+        const u = map.get(it.id);
+        return u ? { ...it, x: u.x, y: u.y } : it;
+      }),
+    }));
+  }
+
+  function moveSceneItem(sceneId: string, itemId: string, x: number, y: number) {
+    updateScene(sceneId, (s) => ({
+      ...s,
+      items: s.items.map((it) => (it.id === itemId ? { ...it, x, y } : it)),
+    }));
+  }
+
+  function updateSceneItemScale(sceneId: string, itemId: string, scale: number) {
+    updateScene(sceneId, (s) => ({
+      ...s,
+      items: s.items.map((it) => (it.id === itemId ? { ...it, scale } : it)),
+    }));
+  }
+
+  function bumpSceneItemZ(sceneId: string, itemId: string, delta: number) {
+    updateScene(sceneId, (s) => ({
+      ...s,
+      items: s.items.map((it) => (it.id === itemId ? { ...it, z: it.z + delta } : it)),
+    }));
+  }
+
+  function toggleSceneItemAnimating(sceneId: string, itemId: string) {
+    updateScene(sceneId, (s) => ({
+      ...s,
+      items: s.items.map((it) =>
+        it.id === itemId ? { ...it, animating: !it.animating } : it
+      ),
+    }));
+  }
+
+  function duplicateSceneItem(sceneId: string, itemId: string) {
+    updateScene(sceneId, (s) => {
+      const orig = s.items.find((it) => it.id === itemId);
+      if (!orig) return s;
+      const maxZ = s.items.reduce((m, it) => Math.max(m, it.z), 0);
+      const dup: SceneItem = {
+        ...orig,
+        id: crypto.randomUUID(),
+        x: Math.min(s.width, orig.x + 32),
+        y: Math.min(s.height, orig.y + 32),
+        z: maxZ + 1,
+      };
+      return { ...s, items: [...s.items, dup] };
+    });
+  }
+
+  function reorderSceneItems(sceneId: string, fromIdx: number, toIdx: number) {
+    updateScene(sceneId, (s) => {
+      // The list is presented in z-descending order (front-first), but items
+      // store an absolute z. To reorder, we rebuild contiguous z-values.
+      const sorted = [...s.items].sort((a, b) => b.z - a.z);
+      if (fromIdx < 0 || fromIdx >= sorted.length || toIdx < 0 || toIdx >= sorted.length) return s;
+      const [moved] = sorted.splice(fromIdx, 1);
+      sorted.splice(toIdx, 0, moved);
+      // Reassign z so highest list-index = 0 (back), lowest index = N-1 (front).
+      const N = sorted.length;
+      const renumbered = sorted.map((it, i) => ({ ...it, z: N - 1 - i }));
+      return { ...s, items: renumbered };
+    });
+  }
+
+  function deleteSceneItem(sceneId: string, itemId: string) {
+    updateScene(sceneId, (s) => ({
+      ...s,
+      items: s.items.filter((it) => it.id !== itemId),
+    }));
+    setSelectedSceneItemIds((cur) => cur.filter((id) => id !== itemId));
+  }
+
+  function deleteScene(sceneId: string) {
+    setScenes((s) => {
+      const { [sceneId]: _drop, ...rest } = s;
+      return rest;
+    });
+    if (activeSceneId === sceneId) setActiveSceneId(null);
+  }
+
+  async function replaceSceneItem(
+    sceneId: string,
+    item: SceneItem,
+    newPrompt: string
+  ) {
+    if (!newPrompt.trim()) return;
+    const oldAsset = assets[item.assetId];
+    if (!oldAsset) return;
+
+    const referenceUrls: string[] = [];
+    if (projectStyle.refUrl) referenceUrls.push(projectStyle.refUrl);
+
+    const res = await fetch("/api/generate", {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({
+        prompt: newPrompt,
+        assetType: oldAsset.assetType,
+        perspective: oldAsset.perspective,
+        pose: "single",
+        quality,
+        variants: 1,
+        referenceUrls,
+        projectStyle: projectStyle.text || undefined,
+        stylePreset: projectStyle.preset,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      alert(`Replace failed: ${data.error || res.status}`);
+      return;
+    }
+    const url = (data.urls as string[])[0];
+    const sourceSize: string = data.size || "1024x1024";
+    const cols: number = data.cols || 1;
+    const rows: number = data.rows || 1;
+    const pixelUrl = await applyPixelate(url, gridSize, sourceSize);
+    const newAssetId = crypto.randomUUID();
+    setAssets((a) => ({
+      ...a,
+      [newAssetId]: {
+        id: newAssetId,
+        prompt: newPrompt,
+        assetType: oldAsset.assetType,
+        perspective: oldAsset.perspective,
+        pose: "single",
+        rawUrl: url,
+        pixelUrl,
+        gridSize,
+        sourceSize,
+        cols,
+        rows,
+        createdAt: Date.now(),
+      },
+    }));
+    updateScene(sceneId, (s) => ({
+      ...s,
+      items: s.items.map((it) => (it.id === item.id ? { ...it, assetId: newAssetId } : it)),
+    }));
+    const rec = recordSpend(currentId, estimateImageCost(quality, "1024x1024", 1), 1, quality as "low" | "medium" | "high");
+    setSessionState(rec.session);
+    setProjectLifetime(rec.project);
+  }
+
+  async function exportScene(sceneId: string) {
+    const s = scenes[sceneId];
+    if (!s) return;
+    const assetsById = assets;
+
+    // Composite render to a single canvas at scene resolution.
+    const canvas = document.createElement("canvas");
+    canvas.width = s.width;
+    canvas.height = s.height;
+    const ctx = canvas.getContext("2d")!;
+    ctx.imageSmoothingEnabled = false;
+
+    // Painted tile layers (below items).
+    if (s.tileGrid) {
+      const ts = s.tileGrid.tileSize;
+      for (const layer of s.tileGrid.layers) {
+        if (!layer.visible) continue;
+        const ta = assetsById[layer.tileAssetId];
+        if (!ta) continue;
+        const tileImg = await loadImg(ta.pixelUrl);
+        for (const c of layer.cells) {
+          ctx.drawImage(tileImg, c.x * ts, c.y * ts, ts, ts);
+        }
+      }
+    }
+
+    // Background tile if any.
+    if (s.backgroundTileId) {
+      const bg = assetsById[s.backgroundTileId];
+      if (bg) {
+        const bgImg = await loadImg(bg.pixelUrl);
+        const tileSize = Math.round(s.width / 8);
+        const pattern = ctx.createPattern(bgImg, "repeat");
+        if (pattern) {
+          ctx.save();
+          ctx.scale(tileSize / bgImg.naturalWidth, tileSize / bgImg.naturalHeight);
+          ctx.fillStyle = pattern;
+          ctx.fillRect(0, 0, s.width / (tileSize / bgImg.naturalWidth), s.height / (tileSize / bgImg.naturalHeight));
+          ctx.restore();
+        }
+      }
+    }
+
+    // Sort by z, draw each item.
+    const longest = Math.max(s.width, s.height);
+    const sorted = [...s.items].sort((a, b) => a.z - b.z);
+    for (const it of sorted) {
+      const a = assetsById[it.assetId];
+      if (!a) continue;
+      const img = await loadImg(a.pixelUrl);
+      const w = it.scale * longest;
+      const aspect = img.naturalWidth / img.naturalHeight;
+      const h = w / aspect;
+      drawWithFlip(ctx, img, it.x, it.y, w, h, it.flipX, it.flipY, it.rotation);
+    }
+
+    const compositeDataUrl = canvas.toDataURL("image/png");
+
+    // Build the JSON manifest.
+    const manifest = {
+      name: s.name,
+      width: s.width,
+      height: s.height,
+      tileGrid: s.tileGrid || null,
+      items: sorted.map((it) => {
+        const a = assetsById[it.assetId];
+        return {
+          id: it.id,
+          asset_filename: a ? `assets/${a.assetType}-${a.id.slice(0, 8)}.png` : null,
+          asset_prompt: a?.prompt,
+          x: Math.round(it.x),
+          y: Math.round(it.y),
+          scale: it.scale,
+          z: it.z,
+          animating: it.animating || false,
+          flipX: it.flipX || false,
+          flipY: it.flipY || false,
+          rotation: it.rotation || 0,
+          pickable: it.pickable || false,
+          linkSceneId: it.linkSceneId || null,
+          patrol: it.patrol || null,
+          kind: it.kind || null,
+          triggerMessage: it.triggerMessage || null,
+          light: it.light || null,
+          emitter: it.emitter || null,
+          sound: it.sound || null,
+          prefabId: it.prefabId || null,
+          prefabSourceId: it.prefabSourceId || null,
+          cols: a?.cols || 1,
+          rows: a?.rows || 1,
+        };
+      }),
+    };
+
+    // Zip everything.
+    const zip = new JSZip();
+    zip.file(`${slugify(s.name)}-composite.png`, dataUrlToBytes(compositeDataUrl));
+    zip.file(`${slugify(s.name)}-scene.json`, JSON.stringify(manifest, null, 2));
+    const seenAssets = new Set<string>();
+    for (const it of sorted) {
+      const a = assetsById[it.assetId];
+      if (!a || seenAssets.has(a.id)) continue;
+      seenAssets.add(a.id);
+      zip.file(`assets/${a.assetType}-${a.id.slice(0, 8)}.png`, dataUrlToBytes(a.rawUrl));
+    }
+    const blob = await zip.generateAsync({ type: "blob" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${slugify(s.name)}-scene.zip`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  async function exportProject() {
+    const project = projects[currentId];
+    if (!project) return;
+    const zip = new JSZip();
+    const projectSlug = slugify(project.name);
+
+    // Top-level project manifest.
+    const manifest = {
+      name: project.name,
+      style: project.style,
+      assetCount: Object.keys(project.assets).length,
+      sceneCount: Object.keys(project.scenes).length,
+      exportedAt: new Date().toISOString(),
+    };
+    zip.file(`${projectSlug}.project.json`, JSON.stringify(manifest, null, 2));
+
+    // Every asset as a PNG, plus a parallel .json with metadata (prompt, tags,
+    // pose, type, etc.) so downstream tools can index them.
+    const assetIndex: Array<Record<string, unknown>> = [];
+    for (const asset of Object.values(project.assets)) {
+      const fileName = `${asset.assetType}-${asset.id.slice(0, 8)}.png`;
+      zip.file(`assets/${fileName}`, dataUrlToBytes(asset.rawUrl));
+      assetIndex.push({
+        id: asset.id,
+        file: `assets/${fileName}`,
+        name: asset.name || asset.prompt,
+        prompt: asset.prompt,
+        type: asset.assetType,
+        perspective: asset.perspective,
+        pose: asset.pose,
+        cols: asset.cols,
+        rows: asset.rows,
+        sourceSize: asset.sourceSize,
+        tags: asset.tags || [],
+        createdAt: asset.createdAt,
+      });
+    }
+    zip.file(`assets.index.json`, JSON.stringify(assetIndex, null, 2));
+
+    // Each scene with its composite + manifest, referencing the existing
+    // assets/ folder (no duplicate PNGs).
+    for (const scene of Object.values(project.scenes)) {
+      const sceneSlug = slugify(scene.name);
+      const sorted = [...scene.items].sort((a, b) => a.z - b.z);
+
+      // Composite render.
+      const canvas = document.createElement("canvas");
+      canvas.width = scene.width;
+      canvas.height = scene.height;
+      const ctx = canvas.getContext("2d")!;
+      ctx.imageSmoothingEnabled = false;
+      // Painted tile layers (below items).
+      if (scene.tileGrid) {
+        const ts = scene.tileGrid.tileSize;
+        for (const layer of scene.tileGrid.layers) {
+          if (!layer.visible) continue;
+          const ta = project.assets[layer.tileAssetId];
+          if (!ta) continue;
+          const tileImg = await loadImg(ta.pixelUrl);
+          for (const c of layer.cells) {
+            ctx.drawImage(tileImg, c.x * ts, c.y * ts, ts, ts);
+          }
+        }
+      }
+      if (scene.backgroundTileId) {
+        const bg = project.assets[scene.backgroundTileId];
+        if (bg) {
+          const bgImg = await loadImg(bg.pixelUrl);
+          const tileSize = Math.round(scene.width / 8);
+          const pattern = ctx.createPattern(bgImg, "repeat");
+          if (pattern) {
+            ctx.save();
+            ctx.scale(tileSize / bgImg.naturalWidth, tileSize / bgImg.naturalHeight);
+            ctx.fillStyle = pattern;
+            ctx.fillRect(
+              0,
+              0,
+              scene.width / (tileSize / bgImg.naturalWidth),
+              scene.height / (tileSize / bgImg.naturalHeight)
+            );
+            ctx.restore();
+          }
+        }
+      }
+      const longest = Math.max(scene.width, scene.height);
+      for (const it of sorted) {
+        const a = project.assets[it.assetId];
+        if (!a) continue;
+        const img = await loadImg(a.pixelUrl);
+        const w = it.scale * longest;
+        const aspect = img.naturalWidth / img.naturalHeight;
+        const h = w / aspect;
+        drawWithFlip(ctx, img, it.x, it.y, w, h, it.flipX, it.flipY, it.rotation);
+      }
+      const compositeUrl = canvas.toDataURL("image/png");
+      zip.file(`scenes/${sceneSlug}.composite.png`, dataUrlToBytes(compositeUrl));
+
+      const sceneManifest = {
+        name: scene.name,
+        width: scene.width,
+        height: scene.height,
+        backgroundTile: scene.backgroundTileId
+          ? `assets/${project.assets[scene.backgroundTileId]?.assetType}-${scene.backgroundTileId.slice(0, 8)}.png`
+          : null,
+        tileGrid: scene.tileGrid || null,
+        items: sorted.map((it) => {
+          const a = project.assets[it.assetId];
+          return {
+            id: it.id,
+            asset_filename: a ? `assets/${a.assetType}-${a.id.slice(0, 8)}.png` : null,
+            asset_name: a?.name || a?.prompt,
+            x: Math.round(it.x),
+            y: Math.round(it.y),
+            scale: it.scale,
+            z: it.z,
+            animating: it.animating || false,
+            flipX: it.flipX || false,
+            flipY: it.flipY || false,
+            rotation: it.rotation || 0,
+            pickable: it.pickable || false,
+            linkSceneId: it.linkSceneId || null,
+            patrol: it.patrol || null,
+            kind: it.kind || null,
+            triggerMessage: it.triggerMessage || null,
+            light: it.light || null,
+            emitter: it.emitter || null,
+            sound: it.sound || null,
+            prefabId: it.prefabId || null,
+            prefabSourceId: it.prefabSourceId || null,
+            cols: a?.cols || 1,
+            rows: a?.rows || 1,
+          };
+        }),
+      };
+      zip.file(`scenes/${sceneSlug}.scene.json`, JSON.stringify(sceneManifest, null, 2));
+    }
+
+    const blob = await zip.generateAsync({ type: "blob" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${projectSlug}.zip`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  function downloadPNG(asset: Asset) {
+    const a = document.createElement("a");
+    a.href = asset.pixelUrl;
+    a.download = `${asset.assetType}-${asset.pose}-${asset.id.slice(0, 8)}.png`;
+    a.click();
+  }
+
+  async function downloadFrames(asset: Asset) {
+    const [w, h] = parseSize(asset.sourceSize);
+    const baseName = `${asset.assetType}-${asset.pose}-${asset.id.slice(0, 8)}`;
+    const blob = await buildSpriteZip({
+      fullSheetUrl: asset.rawUrl,
+      cols: asset.cols,
+      rows: asset.rows,
+      imageWidth: w,
+      imageHeight: h,
+      baseName,
+      pose: asset.pose,
+      perspective: asset.perspective,
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${baseName}.zip`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  async function repixelate(asset: Asset, newGrid: number) {
+    const pixelUrl = await applyPixelate(asset.rawUrl, newGrid, asset.sourceSize);
+    setAssets((a) => ({ ...a, [asset.id]: { ...asset, pixelUrl, gridSize: newGrid } }));
+  }
+
+  async function applySeamless(asset: Asset) {
+    if (asset.assetType !== "tile") return;
+    const seamlessUrl = await makeSeamless(asset.rawUrl);
+    const pixelUrl = await applyPixelate(seamlessUrl, asset.gridSize, asset.sourceSize);
+    const id = crypto.randomUUID();
+    setAssets((a) => ({
+      ...a,
+      [id]: {
+        ...asset,
+        id,
+        rawUrl: seamlessUrl,
+        pixelUrl,
+        editedFrom: asset.id,
+        prompt: `${asset.prompt} (seamless)`,
+        createdAt: Date.now(),
+      },
+    }));
+  }
+
+  function renameAsset(id: string, name: string) {
+    setAssets((a) => {
+      const cur = a[id];
+      if (!cur) return a;
+      const trimmed = name.trim();
+      return { ...a, [id]: { ...cur, name: trimmed || undefined } };
+    });
+  }
+
+  function setAssetTags(id: string, tags: string[]) {
+    setAssets((a) => {
+      const cur = a[id];
+      if (!cur) return a;
+      const cleaned = [...new Set(tags.map((t) => t.trim()).filter(Boolean))];
+      return { ...a, [id]: { ...cur, tags: cleaned.length > 0 ? cleaned : undefined } };
+    });
+  }
+
+  async function applyPaletteToAsset(id: string, palette: Palette) {
+    const a = assets[id];
+    if (!a) return;
+    const newRaw = await applyPalette(a.rawUrl, palette);
+    const newPixel = await applyPixelate(newRaw, a.gridSize, a.sourceSize);
+    const newId = crypto.randomUUID();
+    setAssets((all) => ({
+      ...all,
+      [newId]: {
+        ...a,
+        id: newId,
+        rawUrl: newRaw,
+        pixelUrl: newPixel,
+        prompt: `${a.prompt} (${palette.name})`,
+        editedFrom: a.id,
+        createdAt: Date.now(),
+      },
+    }));
+  }
+
+  function deleteAsset(id: string) {
+    setAssets((a) => {
+      const { [id]: _drop, ...rest } = a;
+      return rest;
+    });
+  }
+
+  function clearAll() {
+    const count = Object.keys(assets).length;
+    if (count === 0) return;
+    if (!confirm(`Delete all ${count} assets in "${currentProject?.name}"?`)) return;
+    setAssets(() => ({}));
+  }
+
+  function useAsReference(asset: Asset) {
+    setMode("edit");
+    setEditRefUrl(asset.rawUrl);
+    setEditRefName(`${asset.assetType}: ${asset.prompt.slice(0, 30)}`);
+    setMaskUrl(null);
+    setShowMaskPainter(false);
+    setAssetType(asset.assetType);
+    setPerspective(asset.perspective);
+    setPose(asset.pose);
+  }
+
+  async function useAsProjectStyle(asset: Asset) {
+    const small = await downscaleImage(asset.rawUrl, 256);
+    setProjectStyle((s) => ({ ...s, refUrl: small }));
+    setStyleOpen(true);
+  }
+
+  async function handleUploadEditRef(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const dataUrl = await readFileAsDataUrl(file);
+    setEditRefUrl(dataUrl);
+    setEditRefName(file.name);
+    setMaskUrl(null);
+    setMode("edit");
+    e.target.value = "";
+  }
+
+  async function handleUploadStyleRef(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const dataUrl = await readFileAsDataUrl(file);
+    const small = await downscaleImage(dataUrl, 256);
+    setProjectStyle((s) => ({ ...s, refUrl: small }));
+    e.target.value = "";
+  }
+
+  const allAssets = Object.values(assets);
+  const allTags = [...new Set(allAssets.flatMap((a) => a.tags || []))].sort();
+  const filteredAssets = allAssets.filter((a) => {
+    if (search) {
+      const q = search.toLowerCase();
+      const hay = `${a.name || ""} ${a.prompt} ${(a.tags || []).join(" ")} ${a.assetType}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    if (activeTags.length > 0) {
+      const t = a.tags || [];
+      if (!activeTags.every((x) => t.includes(x))) return false;
+    }
+    return true;
+  });
+  const recent = filteredAssets.sort((a, b) => b.createdAt - a.createdAt);
+  const hasStyleConfig =
+    projectStyle.text !== "" || projectStyle.refUrl !== null || projectStyle.preset !== "cozy";
+
+  return (
+    <main className="mx-auto max-w-7xl p-3 md:p-6 grid md:grid-cols-[1fr_1.2fr] gap-4 md:h-screen min-h-screen">
+      {/* Chat panel */}
+      <section className="panel flex flex-col p-3 md:p-4 min-h-[500px] md:min-h-0">
+        <header className="border-b-2 border-farm-wood pb-2 mb-3">
+          <div className="flex items-start justify-between gap-2">
+            <div>
+              <h1 className="font-pixel text-2xl text-farm-grass">🎮 Pixel Play</h1>
+              <p className="text-sm opacity-70">Pixel-art asset & scene studio</p>
+            </div>
+            <div className="flex flex-col items-end gap-1">
+              <div className="flex items-center gap-2">
+                <ProjectSwitcher
+                  projects={projects}
+                  currentId={currentId}
+                  onSelect={setCurrentId}
+                  onCreate={createProject}
+                  onRename={renameCurrentProject}
+                  onDelete={deleteCurrentProject}
+                  onExport={exportProject}
+                />
+                <button
+                  onClick={() => setSettingsOpen(true)}
+                  title="Settings — configure your OpenAI API key"
+                  className="px-2 py-1 text-xs border-2 border-farm-wood bg-farm-ink/60 hover:border-farm-grass hover:text-farm-grass"
+                >
+                  ⚙ Settings
+                </button>
+              </div>
+              <CostIndicator session={session} project={projectLifetime} />
+            </div>
+          </div>
+        </header>
+
+        {hydrated && !openaiKey && (
+          <div className="mb-3 flex items-center gap-3 px-3 py-2 border-2 border-yellow-500/60 bg-yellow-900/20 text-sm">
+            <span className="text-xl leading-none">🔑</span>
+            <div className="flex-1">
+              <div className="text-yellow-200 font-medium">No OpenAI key yet</div>
+              <div className="text-yellow-200/70 text-xs">Pixel Play needs your own OpenAI key to generate. Stored in your browser only.</div>
+            </div>
+            <button
+              onClick={() => setSettingsOpen(true)}
+              className="px-3 py-1.5 text-sm border border-yellow-300 bg-yellow-300/10 text-yellow-200 hover:bg-yellow-300/20"
+            >
+              Set key
+            </button>
+          </div>
+        )}
+
+        <ProjectStyleSection
+          open={styleOpen}
+          onToggle={() => setStyleOpen((s) => !s)}
+          style={projectStyle}
+          onChangeText={(text) => setProjectStyle((s) => ({ ...s, text }))}
+          onChangePreset={(preset) => setProjectStyle((s) => ({ ...s, preset }))}
+          onClearRef={() => setProjectStyle((s) => ({ ...s, refUrl: null }))}
+          onUploadRef={handleUploadStyleRef}
+          hasConfig={hasStyleConfig}
+        />
+
+        {/* Messages */}
+        <div ref={scrollRef} className="flex-1 overflow-y-auto pr-1 space-y-3 my-3">
+          {messages.map((m, i) => (
+            <ChatBubble
+              key={i}
+              message={m}
+              assetIds={m.role === "assistant" ? m.assetIds : undefined}
+              assets={assets}
+            />
+          ))}
+          {messages.length === 1 && Object.keys(assets).length === 0 && (
+            <div className="space-y-2 pt-2">
+              <div className="text-xs opacity-60">Try one to get started:</div>
+              <div className="flex flex-wrap gap-1.5">
+                {STARTER_PROMPTS.map((s) => (
+                  <button
+                    key={s.label}
+                    type="button"
+                    onClick={() => {
+                      setInput(s.prompt);
+                      setAssetType(s.type);
+                      if (s.pose) setPose(s.pose);
+                      if (s.perspective) setPerspective(s.perspective);
+                      if (s.split) setSplitItems(true);
+                      if (s.auto !== undefined) setAutoCompose(s.auto);
+                    }}
+                    className="px-2 py-1 border border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass text-xs"
+                  >
+                    {s.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Form */}
+        <form onSubmit={handleSubmit} className="space-y-2 text-sm">
+          {/* Mode tabs */}
+          <div className="flex items-center gap-1 flex-wrap">
+            <button
+              type="button"
+              onClick={() => setMode("generate")}
+              className={`px-3 py-1 border-2 ${
+                mode === "generate"
+                  ? "border-farm-grass bg-farm-grass/20 text-farm-grass"
+                  : "border-farm-wood text-farm-parchment/70"
+              }`}
+            >
+              Generate
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode("edit")}
+              className={`px-3 py-1 border-2 ${
+                mode === "edit"
+                  ? "border-farm-grass bg-farm-grass/20 text-farm-grass"
+                  : "border-farm-wood text-farm-parchment/70"
+              }`}
+            >
+              ✏️ Edit
+            </button>
+            {mode === "generate" && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => setSplitItems((v) => !v)}
+                  title="Parse the prompt as a scene and generate each item as a separate asset"
+                  className={`ml-2 px-2 py-1 border-2 text-sm ${
+                    splitItems
+                      ? "border-farm-grass bg-farm-grass/20 text-farm-grass"
+                      : "border-farm-wood text-farm-parchment/70 hover:border-farm-parchment"
+                  }`}
+                >
+                  🪄 Split items
+                </button>
+                {splitItems && (
+                  <button
+                    type="button"
+                    onClick={() => setAutoCompose((v) => !v)}
+                    title="After items generate, auto-lay them out into a draggable scene canvas"
+                    className={`px-2 py-1 border-2 text-sm ${
+                      autoCompose
+                        ? "border-farm-grass bg-farm-grass/20 text-farm-grass"
+                        : "border-farm-wood text-farm-parchment/70 hover:border-farm-parchment"
+                    }`}
+                  >
+                    🎬 Auto-compose
+                  </button>
+                )}
+              </>
+            )}
+          </div>
+
+          {/* Edit reference + mask painter */}
+          {mode === "edit" && (
+            <div className="space-y-2">
+              <div className="flex items-center gap-2 p-2 border-2 border-dashed border-farm-grass/50 bg-farm-grass/5">
+                {editRefUrl ? (
+                  <>
+                    <img src={editRefUrl} alt="reference" className="pixelated w-12 h-12 object-contain bg-farm-ink" />
+                    <div className="flex-1 text-xs opacity-80 truncate">
+                      Reference: {editRefName || "uploaded"}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setShowMaskPainter((v) => !v)}
+                      className={`text-xs px-2 py-0.5 border ${
+                        showMaskPainter
+                          ? "border-farm-grass bg-farm-grass/20 text-farm-grass"
+                          : "border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass"
+                      }`}
+                    >
+                      🖌 Inpaint
+                    </button>
+                    <button
+                      type="button"
+                      onClick={clearEditRef}
+                      className="text-xs px-2 py-0.5 border border-farm-wood/60 hover:border-red-700 hover:text-red-300"
+                    >
+                      ✕
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <span className="opacity-70">No reference. Pick from gallery or:</span>
+                    <label className="px-2 py-0.5 border border-farm-grass/70 text-farm-grass cursor-pointer hover:bg-farm-grass/10">
+                      Upload
+                      <input type="file" accept="image/*" className="hidden" onChange={handleUploadEditRef} />
+                    </label>
+                  </>
+                )}
+              </div>
+              {showMaskPainter && editRefUrl && (
+                <MaskPainter imageUrl={editRefUrl} onMaskChange={setMaskUrl} />
+              )}
+            </div>
+          )}
+
+          {/* Asset type — primary control, always visible */}
+          <div className="space-y-1">
+            <div className="text-[10px] uppercase tracking-wider opacity-50">Asset type</div>
+            <div className="flex flex-wrap gap-1">
+              {ASSET_TYPES.map((t) => (
+                <button
+                  key={t.value}
+                  type="button"
+                  onClick={() => setAssetType(t.value)}
+                  className={`px-2 py-1 border-2 rounded-sm transition ${
+                    assetType === t.value
+                      ? "border-farm-grass bg-farm-grass/20 text-farm-grass"
+                      : "border-farm-wood text-farm-parchment/70 hover:border-farm-parchment"
+                  }`}
+                >
+                  {t.emoji} {t.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Advanced options — collapsed by default to reduce noise */}
+          <div className="border-t border-farm-wood/30 pt-1.5">
+            <button
+              type="button"
+              onClick={() => setAdvancedOpen((v) => !v)}
+              className="w-full flex items-center justify-between text-[11px] uppercase tracking-wider opacity-60 hover:opacity-90 py-0.5"
+            >
+              <span>{advancedOpen ? "▾" : "▸"} Options</span>
+              {!advancedOpen && (
+                <span className="opacity-70 normal-case tracking-normal">
+                  {PERSPECTIVES.find((p) => p.value === perspective)?.label}
+                  {assetType === "character" && pose !== "single"
+                    ? ` · ${POSES.find((p) => p.value === pose)?.label}`
+                    : ""}
+                  {" · "}
+                  {QUALITIES.find((q) => q.value === quality)?.label}
+                  {variants > 1 ? ` · ${variants}×` : ""}
+                </span>
+              )}
+            </button>
+
+            {advancedOpen && (
+              <div className="mt-2 space-y-1.5 text-xs">
+                <div className="flex flex-wrap items-center gap-2 opacity-90">
+                  <span className="opacity-60 w-20 inline-block">View</span>
+                  {PERSPECTIVES.map((p) => (
+                    <button
+                      key={p.value}
+                      type="button"
+                      onClick={() => setPerspective(p.value)}
+                      className={`px-2 py-0.5 border ${
+                        perspective === p.value ? "border-farm-grass text-farm-grass" : "border-farm-wood/60"
+                      }`}
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+
+                {assetType === "character" && (
+                  <div className="flex flex-wrap items-center gap-2 opacity-90">
+                    <span className="opacity-60 w-20 inline-block">Pose</span>
+                    {POSES.map((p) => (
+                      <button
+                        key={p.value}
+                        type="button"
+                        onClick={() => setPose(p.value)}
+                        title={p.hint}
+                        className={`px-2 py-0.5 border ${
+                          pose === p.value ? "border-farm-grass text-farm-grass" : "border-farm-wood/60"
+                        }`}
+                      >
+                        {p.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                <div className="flex flex-wrap items-center gap-2 opacity-90">
+                  <span className="opacity-60 w-20 inline-block">Pixel snap</span>
+                  {GRID_PRESETS.map((g) => (
+                    <button
+                      key={g}
+                      type="button"
+                      onClick={() => setGridSize(g)}
+                      className={`px-2 py-0.5 border ${
+                        gridSize === g ? "border-farm-grass text-farm-grass" : "border-farm-wood/60"
+                      }`}
+                    >
+                      {gridLabel(g)}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2 opacity-90">
+                  <span className="opacity-60 w-20 inline-block">Quality</span>
+                  {QUALITIES.map((q) => (
+                    <button
+                      key={q.value}
+                      type="button"
+                      onClick={() => setQuality(q.value)}
+                      title={q.cost}
+                      className={`px-2 py-0.5 border ${
+                        quality === q.value ? "border-farm-grass text-farm-grass" : "border-farm-wood/60"
+                      }`}
+                    >
+                      {q.label}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2 opacity-90">
+                  <span className="opacity-60 w-20 inline-block">Variants</span>
+                  {VARIANT_OPTIONS.map((n) => (
+                    <button
+                      key={n}
+                      type="button"
+                      onClick={() => setVariants(n)}
+                      className={`px-2 py-0.5 border w-8 ${
+                        variants === n ? "border-farm-grass text-farm-grass" : "border-farm-wood/60"
+                      }`}
+                    >
+                      {n}×
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Prompt — primary input, the largest control on the form */}
+          <div className="border-t-2 border-farm-wood pt-2 space-y-1.5">
+            <div className="flex items-center justify-between">
+              <label className="text-[10px] uppercase tracking-wider opacity-50">
+                {mode === "edit" ? (maskUrl ? "Inpaint prompt" : "Edit prompt") : splitItems ? "Scene description" : "Prompt"}
+              </label>
+              <span className="text-[10px] opacity-40">↑↓ history · ⏎ submit</span>
+            </div>
+            <div className="flex gap-2">
+              <textarea
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    handleSubmit(e as unknown as React.FormEvent);
+                    return;
+                  }
+                  if (e.key === "ArrowUp" && promptHistory.length > 0 && (input === "" || historyIdx >= 0)) {
+                    e.preventDefault();
+                    const nextIdx = Math.min(historyIdx + 1, promptHistory.length - 1);
+                    setHistoryIdx(nextIdx);
+                    setInput(promptHistory[nextIdx]);
+                    return;
+                  }
+                  if (e.key === "ArrowDown" && historyIdx >= 0) {
+                    e.preventDefault();
+                    const nextIdx = historyIdx - 1;
+                    setHistoryIdx(nextIdx);
+                    setInput(nextIdx < 0 ? "" : promptHistory[nextIdx]);
+                    return;
+                  }
+                }}
+                placeholder={
+                  mode === "edit"
+                    ? maskUrl
+                      ? "Describe what should appear in the painted area"
+                      : "Describe the change — e.g. 'with red overalls', 'now at night'"
+                    : splitItems
+                    ? "Describe a scene — e.g. 'a wizard's potion shop with magical items'"
+                    : assetType === "character"
+                    ? "e.g. a young farmer in overalls and a straw hat"
+                    : "e.g. a sleepy orange tabby cat with a tiny scarf"
+                }
+                rows={2}
+                disabled={busy}
+                className="flex-1 bg-farm-ink/60 border-2 border-farm-wood p-2 text-lg text-farm-parchment focus:outline-none focus:border-farm-grass resize-none"
+              />
+              <button type="submit" disabled={busy || !input.trim()} className="btn-pixel">
+                {busy ? "..." : mode === "edit" ? (maskUrl ? "INPAINT" : "EDIT") : "FORGE"}
+              </button>
+            </div>
+          </div>
+        </form>
+      </section>
+
+      {/* Right panel: Assets / Scenes tabs */}
+      <section className="panel p-3 md:p-4 md:overflow-y-auto min-h-[500px] md:min-h-0">
+        <header className="flex items-center justify-between mb-3 gap-2">
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => setRightTab("assets")}
+              className={`px-3 py-1 border-2 font-pixel text-base ${
+                rightTab === "assets"
+                  ? "border-farm-sky text-farm-sky bg-farm-sky/10"
+                  : "border-farm-wood/60 text-farm-parchment/70"
+              }`}
+            >
+              📦 Assets {Object.keys(assets).length > 0 && <span className="opacity-60 text-xs ml-1">({Object.keys(assets).length})</span>}
+            </button>
+            <button
+              type="button"
+              onClick={() => setRightTab("scenes")}
+              className={`px-3 py-1 border-2 font-pixel text-base ${
+                rightTab === "scenes"
+                  ? "border-farm-sky text-farm-sky bg-farm-sky/10"
+                  : "border-farm-wood/60 text-farm-parchment/70"
+              }`}
+            >
+              🎬 Scenes {Object.keys(scenes).length > 0 && <span className="opacity-60 text-xs ml-1">({Object.keys(scenes).length})</span>}
+            </button>
+          </div>
+          {rightTab === "assets" && recent.length > 0 && (
+            <button
+              onClick={clearAll}
+              className="text-xs px-2 py-1 border border-farm-wood/60 hover:border-red-700 hover:text-red-300"
+            >
+              Clear all
+            </button>
+          )}
+        </header>
+
+        {rightTab === "assets" ? (
+          <>
+            {allAssets.length > 0 && (
+              <div className="space-y-2 mb-3">
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    placeholder="🔍 Search by name, prompt, tag, type…"
+                    className="flex-1 bg-farm-ink/60 border border-farm-wood text-farm-parchment px-2 py-1 text-sm focus:outline-none focus:border-farm-grass"
+                  />
+                  {(search || activeTags.length > 0) && (
+                    <button
+                      onClick={() => {
+                        setSearch("");
+                        setActiveTags([]);
+                      }}
+                      className="text-xs px-2 py-1 border border-farm-wood/60 hover:border-farm-grass"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+                {allTags.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-1 text-xs">
+                    <span className="opacity-60">Tags:</span>
+                    {allTags.map((t) => {
+                      const active = activeTags.includes(t);
+                      return (
+                        <button
+                          key={t}
+                          onClick={() =>
+                            setActiveTags((cur) =>
+                              cur.includes(t) ? cur.filter((x) => x !== t) : [...cur, t]
+                            )
+                          }
+                          className={`px-2 py-0.5 border ${
+                            active
+                              ? "border-farm-grass text-farm-grass bg-farm-grass/10"
+                              : "border-farm-wood/60 hover:border-farm-grass"
+                          }`}
+                        >
+                          #{t}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+                {recent.length !== allAssets.length && (
+                  <div className="text-xs opacity-60">
+                    Showing {recent.length} of {allAssets.length}
+                  </div>
+                )}
+              </div>
+            )}
+            {recent.length === 0 ? (
+              <div className="opacity-60 text-center py-12">
+                <div className="text-6xl mb-3">🌱</div>
+                <p>{allAssets.length === 0 ? "Empty barn. Forge your first asset!" : "No assets match the filter."}</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
+                {recent.map((a) => (
+                  <AssetCard
+                    key={a.id}
+                    asset={a}
+                    onDownloadPNG={() => downloadPNG(a)}
+                    onDownloadFrames={() => downloadFrames(a)}
+                    onUseAsReference={() => useAsReference(a)}
+                    onUseAsProjectStyle={() => useAsProjectStyle(a)}
+                    onRepixelate={(g) => repixelate(a, g)}
+                    onMakeSeamless={() => applySeamless(a)}
+                    onDelete={() => deleteAsset(a.id)}
+                    onRename={(n) => renameAsset(a.id, n)}
+                    onSetTags={(t) => setAssetTags(a.id, t)}
+                    onApplyPalette={() => setPaletteAssetId(a.id)}
+                    onDragStart={() => setDraggingAssetId(a.id)}
+                    onDragEnd={() => setDraggingAssetId(null)}
+                    onSetAsSceneBackground={() => {
+                      if (activeScene && a.assetType === "tile") {
+                        updateScene(activeScene.id, (s) => ({ ...s, backgroundTileId: a.id }));
+                        setRightTab("scenes");
+                      }
+                    }}
+                    sceneActive={!!activeScene}
+                  />
+                ))}
+              </div>
+            )}
+          </>
+        ) : (
+          <ScenesView
+            scenes={scenes}
+            assets={assets}
+            activeSceneId={activeSceneId}
+            onSelectScene={(id) => {
+              setActiveSceneId(id);
+              setSelectedSceneItemIds([]);
+            }}
+            onDeleteScene={deleteScene}
+            onExportScene={exportScene}
+            activeScene={activeScene}
+            selectedSceneItem={selectedSceneItem}
+            selectedSceneItemIds={selectedSceneItemIds}
+            onSelectSceneItem={(id) => setSelectedSceneItemIds(id ? [id] : [])}
+            onSelectionChange={setSelectedSceneItemIds}
+            onDropAsset={(assetId, x, y) =>
+              activeScene && addAssetToScene(activeScene.id, assetId, x, y)
+            }
+            snap={sceneSnap}
+            onSnapChange={setSceneSnap}
+            zoom={sceneZoom}
+            onZoomChange={setSceneZoom}
+            onClearBackground={() => activeScene && clearSceneBackground(activeScene.id)}
+            onDuplicateSceneItem={(id) => activeScene && duplicateSceneItem(activeScene.id, id)}
+            onReorderSceneItems={(from, to) =>
+              activeScene && reorderSceneItems(activeScene.id, from, to)
+            }
+            onToggleSolid={(id) => activeScene && toggleSceneItemSolid(activeScene.id, id)}
+            onToggleFlipX={(id) => activeScene && toggleSceneItemFlipX(activeScene.id, id)}
+            onToggleFlipY={(id) => activeScene && toggleSceneItemFlipY(activeScene.id, id)}
+            onTogglePickable={(id) => activeScene && toggleSceneItemPickable(activeScene.id, id)}
+            onSetLinkScene={(id, linkId) =>
+              activeScene && setSceneItemLinkScene(activeScene.id, id, linkId)
+            }
+            onSetPatrol={(id, patrol) =>
+              activeScene && setSceneItemPatrol(activeScene.id, id, patrol)
+            }
+            onSetTriggerMessage={(id, msg) =>
+              activeScene && setSceneItemTriggerMessage(activeScene.id, id, msg)
+            }
+            onAddTriggerZone={() => activeScene && addTriggerZone(activeScene.id)}
+            onAddPointLight={() => activeScene && addPointLight(activeScene.id)}
+            onSetLight={(id, light) =>
+              activeScene && setSceneItemLight(activeScene.id, id, light)
+            }
+            onAddParticleEmitter={() => activeScene && addParticleEmitter(activeScene.id)}
+            onSetEmitter={(id, emitter) =>
+              activeScene && setSceneItemEmitter(activeScene.id, id, emitter)
+            }
+            onAddSoundTrigger={() => activeScene && addSoundTrigger(activeScene.id)}
+            onSetSound={(id, sound) =>
+              activeScene && setSceneItemSound(activeScene.id, id, sound)
+            }
+            onSetDaytime={(d) => activeScene && setSceneDaytime(activeScene.id, d)}
+            paintMode={paintMode}
+            onPaintModeChange={setPaintMode}
+            activeTileLayerId={activeTileLayerId}
+            onActiveTileLayerChange={setActiveTileLayerId}
+            onAddTileLayer={(tileAssetId) =>
+              activeScene && addTileLayer(activeScene.id, tileAssetId)
+            }
+            onRemoveTileLayer={(layerId) =>
+              activeScene && removeTileLayer(activeScene.id, layerId)
+            }
+            onRenameTileLayer={(layerId, name) =>
+              activeScene && renameTileLayer(activeScene.id, layerId, name)
+            }
+            onSetLayerTileAsset={(layerId, tileAssetId) =>
+              activeScene && setLayerTileAsset(activeScene.id, layerId, tileAssetId)
+            }
+            onToggleLayerVisible={(layerId) =>
+              activeScene && toggleLayerVisible(activeScene.id, layerId)
+            }
+            onReorderTileLayers={(from, to) =>
+              activeScene && reorderTileLayers(activeScene.id, from, to)
+            }
+            onPaintCell={(layerId, x, y) =>
+              activeScene && paintTileCell(activeScene.id, layerId, x, y)
+            }
+            onEraseCell={(layerId, x, y) =>
+              activeScene && eraseTileCell(activeScene.id, layerId, x, y)
+            }
+            onSetTileSize={(n) => activeScene && setTileSize(activeScene.id, n)}
+            prefabs={currentProject?.prefabs || {}}
+            onSavePrefab={(name, items) => savePrefab(name, items)}
+            onDeletePrefab={(id) => deletePrefab(id)}
+            onInstantiatePrefab={(prefabId, x, y) =>
+              activeScene && instantiatePrefab(activeScene.id, prefabId, x, y)
+            }
+            onSyncPrefabInstances={(prefabId) => syncPrefabInstances(prefabId)}
+            playMode={playMode}
+            onPlayModeChange={setPlayMode}
+            activeCharacterId={activeCharacterId}
+            onActiveCharacterChange={setActiveCharacterId}
+            onUpdateCharacterPos={(id, x, y) =>
+              activeScene && setSceneItemPos(activeScene.id, id, x, y)
+            }
+            onPortalEnter={(targetSceneId) => {
+              const target = scenes[targetSceneId];
+              if (!target) return;
+              setActiveSceneId(targetSceneId);
+              // Pick the first character in the target scene as the new player.
+              const candidate = target.items.find(
+                (it) => assets[it.assetId]?.assetType === "character"
+              );
+              setActiveCharacterId(candidate?.id || null);
+            }}
+            onMoveSceneItem={(id, x, y) =>
+              activeScene && moveSceneItem(activeScene.id, id, x, y)
+            }
+            onMoveSceneItems={(updates) =>
+              activeScene && moveSceneItems(activeScene.id, updates)
+            }
+            onRotateSceneItem={(id, deg) =>
+              activeScene && rotateSceneItem(activeScene.id, id, deg)
+            }
+            onUpdateSceneItemScale={(id, scale) =>
+              activeScene && updateSceneItemScale(activeScene.id, id, scale)
+            }
+            onBumpSceneItemZ={(id, delta) =>
+              activeScene && bumpSceneItemZ(activeScene.id, id, delta)
+            }
+            onToggleAnimating={(id) =>
+              activeScene && toggleSceneItemAnimating(activeScene.id, id)
+            }
+            onDeleteSceneItem={(id) =>
+              activeScene && deleteSceneItem(activeScene.id, id)
+            }
+            replacePrompt={replacePrompt}
+            setReplacePrompt={setReplacePrompt}
+            onReplaceItem={async () => {
+              if (!activeScene || !selectedSceneItem) return;
+              const p = replacePrompt.trim();
+              if (!p) return;
+              setReplacePrompt("");
+              await replaceSceneItem(activeScene.id, selectedSceneItem, p);
+            }}
+          />
+        )}
+      </section>
+
+      {paletteAssetId && assets[paletteAssetId] && (
+        <PaletteModal
+          asset={assets[paletteAssetId]}
+          onClose={() => setPaletteAssetId(null)}
+          onApply={async (palette) => {
+            const id = paletteAssetId;
+            setPaletteAssetId(null);
+            if (id) await applyPaletteToAsset(id, palette);
+          }}
+        />
+      )}
+
+      {settingsOpen && (
+        <SettingsModal
+          initialKey={openaiKey}
+          onClose={() => setSettingsOpen(false)}
+          onSave={(k) => {
+            setOpenaiKey(k);
+            try {
+              if (k) localStorage.setItem(OPENAI_KEY_LS, k);
+              else localStorage.removeItem(OPENAI_KEY_LS);
+            } catch {}
+            setSettingsOpen(false);
+          }}
+        />
+      )}
+    </main>
+  );
+}
+
+// ----------------------------------------------------------- subcomponents
+
+function ProjectSwitcher({
+  projects,
+  currentId,
+  onSelect,
+  onCreate,
+  onRename,
+  onDelete,
+  onExport,
+}: {
+  projects: Record<string, Project>;
+  currentId: string;
+  onSelect: (id: string) => void;
+  onCreate: (name: string) => void;
+  onRename: (name: string) => void;
+  onDelete: () => void;
+  onExport: () => void;
+}) {
+  const list = Object.values(projects).sort((a, b) => a.createdAt - b.createdAt);
+  const current = projects[currentId];
+
+  function handleCreate() {
+    const name = prompt("New project name:", "")?.trim();
+    if (name) onCreate(name);
+  }
+  function handleRename() {
+    const name = prompt("Rename project:", current?.name)?.trim();
+    if (name) onRename(name);
+  }
+  function handleDelete() {
+    if (!current) return;
+    if (!confirm(`Delete project "${current.name}" and all its assets?`)) return;
+    onDelete();
+  }
+
+  return (
+    <div className="flex items-center gap-1 text-xs">
+      <select
+        value={currentId}
+        onChange={(e) => onSelect(e.target.value)}
+        className="bg-farm-ink border border-farm-wood text-farm-parchment px-1 py-0.5 max-w-[140px]"
+        title="Switch project"
+      >
+        {list.map((p) => (
+          <option key={p.id} value={p.id}>
+            📁 {p.name}
+          </option>
+        ))}
+      </select>
+      <button
+        type="button"
+        onClick={handleCreate}
+        title="New project"
+        className="px-1.5 py-0.5 border border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass"
+      >
+        +
+      </button>
+      <button
+        type="button"
+        onClick={handleRename}
+        title="Rename"
+        className="px-1.5 py-0.5 border border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass"
+      >
+        ✎
+      </button>
+      <button
+        type="button"
+        onClick={onExport}
+        title="Export entire project (assets + scenes) as zip"
+        className="px-1.5 py-0.5 border border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass"
+      >
+        ⬇
+      </button>
+      <button
+        type="button"
+        onClick={handleDelete}
+        title="Delete project"
+        className="px-1.5 py-0.5 border border-farm-wood/60 hover:border-red-700 hover:text-red-300"
+      >
+        🗑
+      </button>
+    </div>
+  );
+}
+
+function PaletteModal({
+  asset,
+  onClose,
+  onApply,
+}: {
+  asset: Asset;
+  onClose: () => void;
+  onApply: (palette: Palette) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [previews, setPreviews] = useState<Record<string, string>>({});
+  const [customColors, setCustomColors] = useState<RGB[] | null>(null);
+
+  // Generate a small preview per built-in palette so the user can compare.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const out: Record<string, string> = {};
+      for (const p of BUILT_IN_PALETTES) {
+        try {
+          out[p.id] = await applyPalette(asset.pixelUrl, p);
+        } catch {
+          // swallow
+        }
+      }
+      if (!cancelled) setPreviews(out);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [asset.pixelUrl]);
+
+  async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const url = reader.result as string;
+      const colors = await extractPalette(url, 16);
+      setCustomColors(colors);
+    };
+    reader.readAsDataURL(file);
+    e.target.value = "";
+  }
+
+  async function applyAndClose(p: Palette) {
+    setBusy(true);
+    onApply(p);
+  }
+
+  return (
+    <div
+      onClick={onClose}
+      className="fixed inset-0 z-50 bg-farm-ink/70 backdrop-blur-sm flex items-center justify-center p-4"
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="panel bg-farm-ink p-4 max-w-2xl w-full max-h-[90vh] overflow-y-auto"
+      >
+        <div className="flex items-center justify-between mb-3 border-b border-farm-wood pb-2">
+          <h3 className="font-pixel text-lg text-farm-grass">🎯 Snap to palette</h3>
+          <button onClick={onClose} className="px-2 py-1 border border-farm-wood/60">
+            ✕
+          </button>
+        </div>
+        <p className="text-xs opacity-70 mb-3">
+          Replaces every pixel in <span className="text-farm-grass">{asset.name || asset.prompt}</span>{" "}
+          with the closest color in the chosen palette. Result saves as a new asset.
+        </p>
+
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+          {BUILT_IN_PALETTES.map((p) => (
+            <button
+              key={p.id}
+              disabled={busy}
+              onClick={() => applyAndClose(p)}
+              className="bg-farm-ink/60 border-2 border-farm-wood hover:border-farm-grass p-2 text-left disabled:opacity-50"
+            >
+              <div className="aspect-square bg-checker mb-1 overflow-hidden">
+                {previews[p.id] ? (
+                  <img src={previews[p.id]} alt="" className="pixelated w-full h-full" />
+                ) : (
+                  <div className="w-full h-full flex items-center justify-center text-xs opacity-40">
+                    rendering…
+                  </div>
+                )}
+              </div>
+              <div className="text-sm">{p.name}</div>
+              <div className="flex gap-px mt-1 h-2">
+                {p.colors.slice(0, 16).map((c, i) => (
+                  <div
+                    key={i}
+                    className="flex-1"
+                    style={{ background: `rgb(${c[0]}, ${c[1]}, ${c[2]})` }}
+                  />
+                ))}
+              </div>
+            </button>
+          ))}
+
+          <div className="bg-farm-ink/60 border-2 border-farm-wood/60 border-dashed p-2 text-sm">
+            <div className="opacity-70 mb-2">Custom palette from image</div>
+            <label className="px-2 py-1 border border-farm-grass/70 text-farm-grass cursor-pointer hover:bg-farm-grass/10 inline-block text-xs">
+              Upload reference
+              <input type="file" accept="image/*" className="hidden" onChange={handleUpload} />
+            </label>
+            {customColors && (
+              <div className="mt-2 space-y-2">
+                <div className="flex gap-px h-2">
+                  {customColors.map((c, i) => (
+                    <div
+                      key={i}
+                      className="flex-1"
+                      style={{ background: `rgb(${c[0]}, ${c[1]}, ${c[2]})` }}
+                    />
+                  ))}
+                </div>
+                <button
+                  disabled={busy}
+                  onClick={() =>
+                    applyAndClose({ id: "custom", name: `Custom (${customColors.length})`, colors: customColors })
+                  }
+                  className="text-xs px-2 py-1 border border-farm-grass text-farm-grass hover:bg-farm-grass/10"
+                >
+                  Apply this palette
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SettingsModal({
+  initialKey,
+  onClose,
+  onSave,
+}: {
+  initialKey: string;
+  onClose: () => void;
+  onSave: (key: string) => void;
+}) {
+  const [draft, setDraft] = useState(initialKey);
+  const [show, setShow] = useState(false);
+  return (
+    <div
+      className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4"
+      onClick={onClose}
+    >
+      <div
+        className="bg-farm-ink border-2 border-farm-wood w-full max-w-lg p-5 space-y-4"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start justify-between">
+          <div>
+            <h2 className="font-pixel text-xl text-farm-grass">⚙ Settings</h2>
+            <p className="text-xs opacity-70 mt-1">
+              Bring your own OpenAI key. Stored in your browser only — never sent anywhere except api.openai.com.
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            className="text-farm-parchment/70 hover:text-farm-parchment text-xl leading-none px-2"
+            title="Close"
+          >
+            ×
+          </button>
+        </div>
+
+        <div className="space-y-2">
+          <label className="block text-xs uppercase tracking-wide opacity-70">
+            OpenAI API key
+          </label>
+          <div className="flex gap-2">
+            <input
+              type={show ? "text" : "password"}
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              placeholder="sk-proj-…"
+              className="flex-1 bg-farm-bg/40 border border-farm-wood text-farm-parchment text-sm px-2 py-1.5 focus:outline-none focus:border-farm-grass font-mono"
+              autoFocus
+            />
+            <button
+              onClick={() => setShow((v) => !v)}
+              className="px-2 py-1 text-xs border border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass"
+              title={show ? "Hide" : "Show"}
+            >
+              {show ? "🙈" : "👁"}
+            </button>
+          </div>
+          <p className="text-[11px] opacity-60">
+            Get a key at{" "}
+            <a
+              href="https://platform.openai.com/api-keys"
+              target="_blank"
+              rel="noreferrer"
+              className="underline hover:text-farm-grass"
+            >
+              platform.openai.com/api-keys
+            </a>
+            . Image generation requires{" "}
+            <a
+              href="https://platform.openai.com/settings/organization/general"
+              target="_blank"
+              rel="noreferrer"
+              className="underline hover:text-farm-grass"
+            >
+              organization verification
+            </a>
+            . Your key never leaves your browser except in requests to OpenAI's API.
+          </p>
+        </div>
+
+        <div className="flex items-center justify-between pt-2 border-t border-farm-wood/40">
+          <button
+            onClick={() => {
+              setDraft("");
+              onSave("");
+            }}
+            className="text-xs text-red-300 opacity-70 hover:opacity-100"
+            title="Remove the saved key"
+          >
+            Clear key
+          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={onClose}
+              className="px-3 py-1 text-sm border border-farm-wood/60 hover:border-farm-grass"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={() => onSave(draft.trim())}
+              className="px-3 py-1 text-sm border border-farm-grass bg-farm-grass/20 text-farm-grass hover:bg-farm-grass/30"
+            >
+              Save
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CostIndicator({
+  session,
+  project,
+}: {
+  session: SessionState;
+  project: { cost: number; calls: number; byTier?: { low: number; medium: number; high: number; chat: number } };
+}) {
+  const tier = project.byTier;
+  const tooltip = [
+    `This session: ${session.calls} calls`,
+    `Project lifetime: ${project.calls} calls`,
+    "",
+    "Project breakdown:",
+    tier ? `  Low: ${formatDollars(tier.low)}` : null,
+    tier ? `  Medium: ${formatDollars(tier.medium)}` : null,
+    tier ? `  High: ${formatDollars(tier.high)}` : null,
+    tier ? `  Chat (parsing/layout): ${formatDollars(tier.chat)}` : null,
+  ].filter(Boolean).join("\n");
+  return (
+    <div className="text-[11px] opacity-60 flex items-center gap-2" title={tooltip}>
+      <span>💰 session {formatDollars(session.cost)}</span>
+      {project.cost > 0 && (
+        <span className="opacity-70">/ project {formatDollars(project.cost)}</span>
+      )}
+    </div>
+  );
+}
+
+function ProjectStyleSection({
+  open,
+  onToggle,
+  style,
+  onChangeText,
+  onChangePreset,
+  onClearRef,
+  onUploadRef,
+  hasConfig,
+}: {
+  open: boolean;
+  onToggle: () => void;
+  style: ProjectStyle;
+  onChangeText: (text: string) => void;
+  onChangePreset: (preset: StylePreset) => void;
+  onClearRef: () => void;
+  onUploadRef: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  hasConfig: boolean;
+}) {
+  const presetLabel = STYLE_PRESETS.find((p) => p.value === style.preset)?.label || "Cozy";
+  return (
+    <div className="border-2 border-farm-wood/60 bg-farm-ink/30">
+      <button
+        type="button"
+        onClick={onToggle}
+        className="w-full flex items-center justify-between px-3 py-1 text-sm hover:bg-farm-wood/20"
+      >
+        <span>
+          🎨 Project style — <span className="opacity-70">{presetLabel}</span>
+          {hasConfig && <span className="text-farm-grass text-xs ml-1">active</span>}
+        </span>
+        <span className="opacity-60">{open ? "▾" : "▸"}</span>
+      </button>
+      {open && (
+        <div className="p-3 space-y-2 text-sm border-t border-farm-wood/40">
+          {/* Preset */}
+          <div>
+            <div className="text-xs opacity-70 mb-1">Preset:</div>
+            <div className="flex flex-wrap gap-1">
+              {STYLE_PRESETS.map((p) => (
+                <button
+                  key={p.value}
+                  type="button"
+                  onClick={() => onChangePreset(p.value)}
+                  title={p.hint}
+                  className={`px-2 py-0.5 border text-xs ${
+                    style.preset === p.value
+                      ? "border-farm-grass text-farm-grass bg-farm-grass/10"
+                      : "border-farm-wood/60"
+                  }`}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <p className="opacity-70 text-xs">
+            Style descriptor and reference are appended to every prompt.
+          </p>
+          <textarea
+            value={style.text}
+            onChange={(e) => onChangeText(e.target.value)}
+            placeholder="e.g. muted earth tones, hand-drawn texture, soft outline"
+            rows={2}
+            className="w-full bg-farm-ink/60 border-2 border-farm-wood p-2 focus:outline-none focus:border-farm-grass resize-none"
+          />
+          <div className="flex items-center gap-2">
+            {style.refUrl ? (
+              <>
+                <img src={style.refUrl} alt="style" className="pixelated w-12 h-12 object-contain bg-farm-ink" />
+                <span className="opacity-70 text-xs flex-1">Style reference set</span>
+                <button
+                  type="button"
+                  onClick={onClearRef}
+                  className="text-xs px-2 py-0.5 border border-farm-wood/60 hover:border-red-700 hover:text-red-300"
+                >
+                  Clear
+                </button>
+              </>
+            ) : (
+              <label className="px-2 py-0.5 border border-farm-grass/70 text-farm-grass cursor-pointer hover:bg-farm-grass/10 text-xs">
+                Upload reference image
+                <input type="file" accept="image/*" className="hidden" onChange={onUploadRef} />
+              </label>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ChatBubble({
+  message,
+  assetIds,
+  assets,
+}: {
+  message: ChatMessage;
+  assetIds?: string[];
+  assets: Record<string, Asset>;
+}) {
+  const isUser = message.role === "user";
+  const isError = message.role === "assistant" && message.error;
+  const typeMeta =
+    message.role === "user"
+      ? ASSET_TYPES.find((t) => t.value === message.assetType)
+      : undefined;
+  const renderedAssets = (assetIds || [])
+    .map((id) => assets[id])
+    .filter((a): a is Asset => Boolean(a));
+  return (
+    <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
+      <div
+        className={`max-w-[85%] px-3 py-2 border-2 ${
+          isUser
+            ? "bg-farm-grass/20 border-farm-grass"
+            : isError
+            ? "bg-red-900/40 border-red-700 text-red-200"
+            : "bg-farm-wood/30 border-farm-wood"
+        }`}
+      >
+        {typeMeta && message.role === "user" && (
+          <div className="text-xs opacity-60 mb-1">
+            {typeMeta.emoji} {typeMeta.label} · {message.perspective}
+            {message.pose !== "single" ? ` · ${message.pose}` : ""}
+            {message.mode === "edit" ? " · ✏️ edit" : ""}
+          </div>
+        )}
+        <div className="text-lg leading-snug">{message.text}</div>
+        {renderedAssets.length > 0 && (
+          <div className="mt-2 flex flex-wrap gap-2">
+            {renderedAssets.map((a) => (
+              <div key={a.id} className="inline-block bg-farm-ink/40 p-1 border-2 border-farm-ink">
+                <img
+                  src={a.pixelUrl}
+                  alt={a.prompt}
+                  className="pixelated max-w-full max-h-48"
+                />
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ScenesView({
+  scenes,
+  assets,
+  activeSceneId,
+  onSelectScene,
+  onDeleteScene,
+  onExportScene,
+  activeScene,
+  selectedSceneItem,
+  selectedSceneItemIds,
+  onSelectSceneItem,
+  onSelectionChange,
+  onDropAsset,
+  snap,
+  onSnapChange,
+  zoom,
+  onZoomChange,
+  onClearBackground,
+  onMoveSceneItem,
+  onMoveSceneItems,
+  onRotateSceneItem,
+  onUpdateSceneItemScale,
+  onBumpSceneItemZ,
+  onToggleAnimating,
+  onDeleteSceneItem,
+  onDuplicateSceneItem,
+  onReorderSceneItems,
+  onToggleSolid,
+  onToggleFlipX,
+  onToggleFlipY,
+  onTogglePickable,
+  onSetLinkScene,
+  onSetPatrol,
+  onSetTriggerMessage,
+  onAddTriggerZone,
+  onAddPointLight,
+  onSetLight,
+  onAddParticleEmitter,
+  onSetEmitter,
+  onAddSoundTrigger,
+  onSetSound,
+  onSetDaytime,
+  paintMode,
+  onPaintModeChange,
+  activeTileLayerId,
+  onActiveTileLayerChange,
+  onAddTileLayer,
+  onRemoveTileLayer,
+  onRenameTileLayer,
+  onSetLayerTileAsset,
+  onToggleLayerVisible,
+  onReorderTileLayers,
+  onPaintCell,
+  onEraseCell,
+  onSetTileSize,
+  prefabs,
+  onSavePrefab,
+  onDeletePrefab,
+  onInstantiatePrefab,
+  onSyncPrefabInstances,
+  playMode,
+  onPlayModeChange,
+  activeCharacterId,
+  onActiveCharacterChange,
+  onUpdateCharacterPos,
+  onPortalEnter,
+  replacePrompt,
+  setReplacePrompt,
+  onReplaceItem,
+}: {
+  scenes: Record<string, Scene>;
+  assets: Record<string, Asset>;
+  activeSceneId: string | null;
+  onSelectScene: (id: string | null) => void;
+  onDeleteScene: (id: string) => void;
+  onExportScene: (id: string) => void;
+  activeScene: Scene | null;
+  selectedSceneItem: SceneItem | null;
+  selectedSceneItemIds: string[];
+  onSelectSceneItem: (id: string | null) => void;
+  onSelectionChange: (ids: string[]) => void;
+  onDropAsset: (assetId: string, x: number, y: number) => void;
+  snap: number;
+  onSnapChange: (n: number) => void;
+  zoom: number;
+  onZoomChange: (n: number) => void;
+  onClearBackground: () => void;
+  onMoveSceneItem: (id: string, x: number, y: number) => void;
+  onMoveSceneItems: (updates: Array<{ id: string; x: number; y: number }>) => void;
+  onRotateSceneItem: (id: string, deg: number) => void;
+  onUpdateSceneItemScale: (id: string, scale: number) => void;
+  onBumpSceneItemZ: (id: string, delta: number) => void;
+  onToggleAnimating: (id: string) => void;
+  onDeleteSceneItem: (id: string) => void;
+  onDuplicateSceneItem: (id: string) => void;
+  onReorderSceneItems: (from: number, to: number) => void;
+  onToggleSolid: (id: string) => void;
+  onToggleFlipX: (id: string) => void;
+  onToggleFlipY: (id: string) => void;
+  onTogglePickable: (id: string) => void;
+  onSetLinkScene: (id: string, linkId: string | undefined) => void;
+  onSetPatrol: (id: string, patrol: SceneItem["patrol"]) => void;
+  onSetTriggerMessage: (id: string, msg: string) => void;
+  onAddTriggerZone: () => void;
+  onAddPointLight: () => void;
+  onSetLight: (id: string, light: SceneItem["light"]) => void;
+  onAddParticleEmitter: () => void;
+  onSetEmitter: (id: string, emitter: SceneItem["emitter"]) => void;
+  onAddSoundTrigger: () => void;
+  onSetSound: (id: string, sound: SceneItem["sound"]) => void;
+  onSetDaytime: (d: number) => void;
+  paintMode: "off" | "paint" | "erase";
+  onPaintModeChange: (m: "off" | "paint" | "erase") => void;
+  activeTileLayerId: string | null;
+  onActiveTileLayerChange: (id: string | null) => void;
+  onAddTileLayer: (tileAssetId?: string) => void;
+  onRemoveTileLayer: (layerId: string) => void;
+  onRenameTileLayer: (layerId: string, name: string) => void;
+  onSetLayerTileAsset: (layerId: string, tileAssetId: string) => void;
+  onToggleLayerVisible: (layerId: string) => void;
+  onReorderTileLayers: (from: number, to: number) => void;
+  onPaintCell: (layerId: string, x: number, y: number) => void;
+  onEraseCell: (layerId: string, x: number, y: number) => void;
+  onSetTileSize: (n: number) => void;
+  prefabs: Record<string, Prefab>;
+  onSavePrefab: (name: string, items: SceneItem[]) => void;
+  onDeletePrefab: (prefabId: string) => void;
+  onInstantiatePrefab: (prefabId: string, x: number, y: number) => void;
+  onSyncPrefabInstances: (prefabId: string) => void;
+  playMode: boolean;
+  onPlayModeChange: (b: boolean) => void;
+  activeCharacterId: string | null;
+  onActiveCharacterChange: (id: string | null) => void;
+  onUpdateCharacterPos: (id: string, x: number, y: number) => void;
+  onPortalEnter: (targetSceneId: string) => void;
+  replacePrompt: string;
+  setReplacePrompt: (s: string) => void;
+  onReplaceItem: () => void;
+}) {
+  const sceneList = Object.values(scenes).sort((a, b) => b.createdAt - a.createdAt);
+  const canvasAssets: Record<string, CanvasAsset> = {};
+  for (const [id, a] of Object.entries(assets)) {
+    canvasAssets[id] = {
+      id: a.id,
+      rawUrl: a.rawUrl,
+      pixelUrl: a.pixelUrl,
+      cols: a.cols,
+      rows: a.rows,
+      sourceSize: a.sourceSize,
+    };
+  }
+  const selectedAsset = selectedSceneItem ? assets[selectedSceneItem.assetId] : null;
+  // Hierarchy still highlights a single row; use the first selection or none.
+  const selectedSceneItemId =
+    selectedSceneItemIds.length === 1 ? selectedSceneItemIds[0] : null;
+
+  if (sceneList.length === 0) {
+    return (
+      <div className="opacity-60 text-center py-12">
+        <div className="text-6xl mb-3">🎬</div>
+        <p>No scenes yet.</p>
+        <p className="text-xs mt-2">
+          Try Generate + 🪄 Split items + Auto-compose.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      {/* Scene picker */}
+      <div className="flex items-center gap-2 text-sm">
+        <select
+          value={activeSceneId || ""}
+          onChange={(e) => onSelectScene(e.target.value || null)}
+          className="bg-farm-ink border border-farm-wood text-farm-parchment px-2 py-1 flex-1"
+        >
+          <option value="">— pick a scene —</option>
+          {sceneList.map((s) => (
+            <option key={s.id} value={s.id}>
+              🎬 {s.name} ({s.items.length} items)
+            </option>
+          ))}
+        </select>
+        {activeScene && (
+          <>
+            <button
+              type="button"
+              onClick={() => onExportScene(activeScene.id)}
+              title="Export scene + assets as zip"
+              className="px-2 py-1 border border-farm-grass text-farm-grass hover:bg-farm-grass/10 text-xs"
+            >
+              ⬇ Export
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (confirm(`Delete scene "${activeScene.name}"?`)) onDeleteScene(activeScene.id);
+              }}
+              className="px-2 py-1 border border-farm-wood/60 hover:border-red-700 hover:text-red-300 text-xs"
+            >
+              🗑
+            </button>
+          </>
+        )}
+      </div>
+
+      {activeScene ? (
+        <>
+          {/* Play / Edit toggle + active character picker */}
+          {(() => {
+            const characterCandidates = activeScene.items
+              .map((it) => ({ it, a: assets[it.assetId] }))
+              .filter(({ a }) => a && a.assetType === "character");
+            const autoPicked =
+              activeCharacterId && characterCandidates.some(({ it }) => it.id === activeCharacterId)
+                ? activeCharacterId
+                : characterCandidates[0]?.it.id || null;
+            return (
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => onPlayModeChange(false)}
+                    className={`px-2 py-1 border ${
+                      !playMode ? "border-farm-grass text-farm-grass bg-farm-grass/10" : "border-farm-wood/60"
+                    }`}
+                  >
+                    ✎ Edit
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!autoPicked) {
+                        alert("Add a character to the scene first.");
+                        return;
+                      }
+                      if (activeCharacterId !== autoPicked) onActiveCharacterChange(autoPicked);
+                      onPlayModeChange(true);
+                    }}
+                    className={`px-2 py-1 border ${
+                      playMode ? "border-farm-grass text-farm-grass bg-farm-grass/10" : "border-farm-wood/60"
+                    }`}
+                  >
+                    ▶ Play
+                  </button>
+                </div>
+                {playMode && characterCandidates.length > 0 && (
+                  <label className="flex items-center gap-1 opacity-80">
+                    <span>Player:</span>
+                    <select
+                      value={activeCharacterId || ""}
+                      onChange={(e) => onActiveCharacterChange(e.target.value || null)}
+                      className="bg-farm-ink border border-farm-wood text-farm-parchment px-1 py-0.5"
+                    >
+                      {characterCandidates.map(({ it, a }) => (
+                        <option key={it.id} value={it.id}>
+                          {a?.name || a?.prompt}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+              </div>
+            );
+          })()}
+
+          {playMode ? (
+            <ScenePlayer
+              scene={activeScene}
+              assets={canvasAssets}
+              activeCharacterId={activeCharacterId}
+              onUpdateCharacterPos={onUpdateCharacterPos}
+              onPortalEnter={onPortalEnter}
+            />
+          ) : null}
+
+          {!playMode && activeScene.backgroundTileId && assets[activeScene.backgroundTileId] && (
+            <div className="flex items-center gap-2 text-xs opacity-80">
+              <img
+                src={assets[activeScene.backgroundTileId].pixelUrl}
+                alt=""
+                className="pixelated w-8 h-8 object-cover bg-farm-ink"
+              />
+              <span>
+                Background: {assets[activeScene.backgroundTileId].name || assets[activeScene.backgroundTileId].prompt}
+              </span>
+              <button
+                type="button"
+                onClick={onClearBackground}
+                className="px-2 py-0.5 border border-farm-wood/60 hover:border-red-700 hover:text-red-300"
+              >
+                Clear
+              </button>
+            </div>
+          )}
+          {!playMode && <>
+          <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] opacity-70">
+            <span>💡 Drag from 📦 Assets onto canvas. Arrows nudge · Del removes · ⌘D dup · ⌘] front · ⌘[ back · Esc deselect.</span>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={onAddTriggerZone}
+                title="Add an invisible trigger zone (fires a message when the player enters in Play Mode)"
+                className="px-2 py-0.5 border border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass"
+              >
+                ⚡ + Trigger
+              </button>
+              <button
+                type="button"
+                onClick={onAddPointLight}
+                title="Add a point light (radial glow in Play Mode)"
+                className="px-2 py-0.5 border border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass"
+              >
+                💡 + Light
+              </button>
+              <button
+                type="button"
+                onClick={onAddParticleEmitter}
+                title="Add a particle emitter (sparkle/smoke in Play Mode)"
+                className="px-2 py-0.5 border border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass"
+              >
+                ✨ + Emitter
+              </button>
+              <button
+                type="button"
+                onClick={onAddSoundTrigger}
+                title="Add a sound trigger (audio plays when player enters its bbox in Play Mode)"
+                className="px-2 py-0.5 border border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass"
+              >
+                🔊 + Sound
+              </button>
+              <label className="flex items-center gap-1" title="0=midnight · 0.5=noon · 1=midnight">
+                ☀️
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  value={activeScene.daytime ?? 0.5}
+                  onChange={(e) => onSetDaytime(Number(e.target.value))}
+                  className="accent-farm-grass w-20"
+                />
+              </label>
+              <div className="flex items-center gap-1">
+                <span>Snap:</span>
+                {[0, 8, 16, 32].map((n) => (
+                  <button
+                    key={n}
+                    type="button"
+                    onClick={() => onSnapChange(n)}
+                    className={`px-1.5 py-0.5 border ${
+                      snap === n ? "border-farm-grass text-farm-grass" : "border-farm-wood/60"
+                    }`}
+                  >
+                    {n === 0 ? "Off" : `${n}px`}
+                  </button>
+                ))}
+              </div>
+              <div className="flex items-center gap-1">
+                <span>Zoom:</span>
+                {[1, 2, 4].map((n) => (
+                  <button
+                    key={n}
+                    type="button"
+                    onClick={() => onZoomChange(n)}
+                    className={`px-1.5 py-0.5 border ${
+                      zoom === n ? "border-farm-grass text-farm-grass" : "border-farm-wood/60"
+                    }`}
+                  >
+                    {n}×
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+          {/* Tile painting controls bar — Phase 4 tile painter. */}
+          <TilePaintBar
+            scene={activeScene}
+            tileAssets={Object.values(assets).filter((a) => a.assetType === "tile")}
+            paintMode={paintMode}
+            onPaintModeChange={onPaintModeChange}
+            activeTileLayerId={activeTileLayerId}
+            onActiveTileLayerChange={onActiveTileLayerChange}
+            onAddTileLayer={onAddTileLayer}
+            onRemoveTileLayer={onRemoveTileLayer}
+            onRenameTileLayer={onRenameTileLayer}
+            onSetLayerTileAsset={onSetLayerTileAsset}
+            onToggleLayerVisible={onToggleLayerVisible}
+            onReorderTileLayers={onReorderTileLayers}
+            onSetTileSize={onSetTileSize}
+          />
+          <div className="overflow-auto">
+            <SceneCanvas
+              scene={activeScene}
+              assets={canvasAssets}
+              selectedItemIds={selectedSceneItemIds}
+              onSelectionChange={onSelectionChange}
+              onMoveItem={onMoveSceneItem}
+              onMoveItems={onMoveSceneItems}
+              onScaleItem={onUpdateSceneItemScale}
+              onRotateItem={onRotateSceneItem}
+              paintMode={paintMode}
+              activeTileLayerId={activeTileLayerId}
+              onPaintCell={onPaintCell}
+              onEraseCell={onEraseCell}
+              onDropPrefab={onInstantiatePrefab}
+              onDropAsset={onDropAsset}
+              snap={snap}
+              zoom={zoom}
+            />
+          </div>
+          {/* Hierarchy panel */}
+          <SceneHierarchy
+            scene={activeScene}
+            assets={assets}
+            selectedItemId={selectedSceneItemId}
+            onSelect={onSelectSceneItem}
+            onReorder={onReorderSceneItems}
+            onDelete={onDeleteSceneItem}
+            onDuplicate={onDuplicateSceneItem}
+            onToggleAnim={onToggleAnimating}
+            onToggleSolid={onToggleSolid}
+            onToggleFlipX={onToggleFlipX}
+            onToggleFlipY={onToggleFlipY}
+            onTogglePickable={onTogglePickable}
+          />
+          <PrefabLibrary
+            prefabs={prefabs}
+            onDelete={onDeletePrefab}
+            onSync={onSyncPrefabInstances}
+          />
+          {selectedSceneItem && selectedSceneItem.kind === "emitter" ? (
+            <div className="border-2 border-farm-grass/60 bg-farm-ink/40 p-2 space-y-2 text-sm">
+              <div className="flex items-center gap-2">
+                <span className="text-2xl">✨</span>
+                <div className="flex-1">
+                  <div className="font-pixel text-base text-farm-grass">Particle emitter</div>
+                </div>
+                <button
+                  onClick={() => onDeleteSceneItem(selectedSceneItem.id)}
+                  className="px-2 py-0.5 border border-farm-wood/60 hover:border-red-700 hover:text-red-300"
+                >
+                  ✕
+                </button>
+              </div>
+              {(() => {
+                const em = selectedSceneItem.emitter || { kind: "sparkle" as const, rate: 4, lifetime: 1.5 };
+                return (
+                  <>
+                    <div className="flex items-center gap-1 text-xs">
+                      <span>Kind:</span>
+                      {(["sparkle", "smoke"] as const).map((k) => (
+                        <button
+                          key={k}
+                          type="button"
+                          onClick={() => onSetEmitter(selectedSceneItem.id, { ...em, kind: k })}
+                          className={`px-2 py-0.5 border ${
+                            em.kind === k
+                              ? "border-farm-grass text-farm-grass bg-farm-grass/10"
+                              : "border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass"
+                          }`}
+                        >
+                          {k}
+                        </button>
+                      ))}
+                    </div>
+                    <label className="flex items-center gap-2 text-xs">
+                      Rate:
+                      <input
+                        type="range"
+                        min={1}
+                        max={20}
+                        step={1}
+                        value={em.rate}
+                        onChange={(e) =>
+                          onSetEmitter(selectedSceneItem.id, { ...em, rate: Number(e.target.value) })
+                        }
+                        className="accent-farm-grass flex-1"
+                      />
+                      <span className="w-8 text-right tabular-nums">{em.rate}/s</span>
+                    </label>
+                    <label className="flex items-center gap-2 text-xs">
+                      Lifetime:
+                      <input
+                        type="range"
+                        min={0.3}
+                        max={4}
+                        step={0.1}
+                        value={em.lifetime}
+                        onChange={(e) =>
+                          onSetEmitter(selectedSceneItem.id, { ...em, lifetime: Number(e.target.value) })
+                        }
+                        className="accent-farm-grass flex-1"
+                      />
+                      <span className="w-10 text-right tabular-nums">{em.lifetime.toFixed(1)}s</span>
+                    </label>
+                  </>
+                );
+              })()}
+            </div>
+          ) : selectedSceneItem && selectedSceneItem.kind === "sound" ? (
+            <div className="border-2 border-farm-grass/60 bg-farm-ink/40 p-2 space-y-2 text-sm">
+              <div className="flex items-center gap-2">
+                <span className="text-2xl">🔊</span>
+                <div className="flex-1">
+                  <div className="font-pixel text-base text-farm-grass">Sound trigger</div>
+                  <div className="text-[10px] opacity-60">Plays audio when player enters bbox</div>
+                </div>
+                <button
+                  onClick={() => onDeleteSceneItem(selectedSceneItem.id)}
+                  className="px-2 py-0.5 border border-farm-wood/60 hover:border-red-700 hover:text-red-300"
+                >
+                  ✕
+                </button>
+              </div>
+              {(() => {
+                const sn = selectedSceneItem.sound || { url: "", volume: 0.6, loop: false };
+                return (
+                  <>
+                    <label className="flex flex-col gap-1 text-xs">
+                      <span>Audio URL:</span>
+                      <input
+                        type="text"
+                        value={sn.url}
+                        onChange={(e) =>
+                          onSetSound(selectedSceneItem.id, { ...sn, url: e.target.value })
+                        }
+                        placeholder="https://… (leave blank to stub a log entry)"
+                        className="bg-farm-ink/60 border border-farm-wood text-farm-parchment px-2 py-1 focus:outline-none focus:border-farm-grass"
+                      />
+                    </label>
+                    <label className="flex items-center gap-2 text-xs">
+                      Volume:
+                      <input
+                        type="range"
+                        min={0}
+                        max={1}
+                        step={0.05}
+                        value={sn.volume}
+                        onChange={(e) =>
+                          onSetSound(selectedSceneItem.id, { ...sn, volume: Number(e.target.value) })
+                        }
+                        className="accent-farm-grass flex-1"
+                      />
+                      <span className="w-10 text-right tabular-nums">
+                        {Math.round(sn.volume * 100)}%
+                      </span>
+                    </label>
+                    <label className="flex items-center gap-2 text-xs">
+                      <input
+                        type="checkbox"
+                        checked={sn.loop}
+                        onChange={(e) =>
+                          onSetSound(selectedSceneItem.id, { ...sn, loop: e.target.checked })
+                        }
+                        className="accent-farm-grass"
+                      />
+                      Loop
+                    </label>
+                  </>
+                );
+              })()}
+            </div>
+          ) : selectedSceneItem && selectedSceneItem.kind === "light" ? (
+            <div className="border-2 border-farm-grass/60 bg-farm-ink/40 p-2 space-y-2 text-sm">
+              <div className="flex items-center gap-2">
+                <span className="text-2xl">💡</span>
+                <div className="flex-1">
+                  <div className="font-pixel text-base text-farm-grass">Point light</div>
+                  <div className="text-[10px] opacity-60">
+                    Radial glow rendered in play mode
+                  </div>
+                </div>
+                <button
+                  onClick={() => onDeleteSceneItem(selectedSceneItem.id)}
+                  className="px-2 py-0.5 border border-farm-wood/60 hover:border-red-700 hover:text-red-300"
+                >
+                  ✕
+                </button>
+              </div>
+              {(() => {
+                const light = selectedSceneItem.light || { radius: 200, color: "#ffd47a", intensity: 0.7 };
+                return (
+                  <>
+                    <label className="flex items-center gap-2 text-xs">
+                      Color:
+                      <input
+                        type="color"
+                        value={light.color}
+                        onChange={(e) =>
+                          onSetLight(selectedSceneItem.id, { ...light, color: e.target.value })
+                        }
+                        className="bg-transparent w-8 h-6"
+                      />
+                      <span className="opacity-60 tabular-nums">{light.color}</span>
+                    </label>
+                    <label className="flex items-center gap-2 text-xs">
+                      Radius:
+                      <input
+                        type="range"
+                        min={32}
+                        max={800}
+                        step={8}
+                        value={light.radius}
+                        onChange={(e) =>
+                          onSetLight(selectedSceneItem.id, { ...light, radius: Number(e.target.value) })
+                        }
+                        className="accent-farm-grass flex-1"
+                      />
+                      <span className="w-12 text-right tabular-nums">{light.radius}px</span>
+                    </label>
+                    <label className="flex items-center gap-2 text-xs">
+                      Intensity:
+                      <input
+                        type="range"
+                        min={0.05}
+                        max={1}
+                        step={0.05}
+                        value={light.intensity}
+                        onChange={(e) =>
+                          onSetLight(selectedSceneItem.id, { ...light, intensity: Number(e.target.value) })
+                        }
+                        className="accent-farm-grass flex-1"
+                      />
+                      <span className="w-10 text-right tabular-nums">
+                        {Math.round(light.intensity * 100)}%
+                      </span>
+                    </label>
+                    <div className="flex items-center gap-2 text-xs">
+                      <span>Pos:</span>
+                      <label className="flex items-center gap-1">
+                        x
+                        <input
+                          type="number"
+                          step={1}
+                          value={Math.round(selectedSceneItem.x)}
+                          onChange={(e) => {
+                            const v = Number(e.target.value);
+                            if (!Number.isFinite(v)) return;
+                            onMoveSceneItem(selectedSceneItem.id, v, selectedSceneItem.y);
+                          }}
+                          className="w-16 bg-farm-ink border border-farm-wood text-farm-parchment px-1 tabular-nums"
+                        />
+                      </label>
+                      <label className="flex items-center gap-1">
+                        y
+                        <input
+                          type="number"
+                          step={1}
+                          value={Math.round(selectedSceneItem.y)}
+                          onChange={(e) => {
+                            const v = Number(e.target.value);
+                            if (!Number.isFinite(v)) return;
+                            onMoveSceneItem(selectedSceneItem.id, selectedSceneItem.x, v);
+                          }}
+                          className="w-16 bg-farm-ink border border-farm-wood text-farm-parchment px-1 tabular-nums"
+                        />
+                      </label>
+                    </div>
+                  </>
+                );
+              })()}
+            </div>
+          ) : selectedSceneItem && selectedSceneItem.kind === "trigger" ? (
+            <div className="border-2 border-farm-grass/60 bg-farm-ink/40 p-2 space-y-2 text-sm">
+              <div className="flex items-center gap-2">
+                <span className="text-2xl">⚡</span>
+                <div className="flex-1">
+                  <div className="font-pixel text-base text-farm-grass">Trigger zone</div>
+                  <div className="text-[10px] opacity-60">
+                    Invisible in play mode · fires message when player enters
+                  </div>
+                </div>
+                <button
+                  onClick={() => onDeleteSceneItem(selectedSceneItem.id)}
+                  title="Remove trigger zone"
+                  className="px-2 py-0.5 border border-farm-wood/60 hover:border-red-700 hover:text-red-300"
+                >
+                  ✕
+                </button>
+              </div>
+              <label className="flex flex-col gap-1 text-xs">
+                <span>Trigger message:</span>
+                <input
+                  type="text"
+                  value={selectedSceneItem.triggerMessage || ""}
+                  onChange={(e) =>
+                    onSetTriggerMessage(selectedSceneItem.id, e.target.value)
+                  }
+                  placeholder="e.g. 'You enter a dark cave.'"
+                  className="bg-farm-ink/60 border border-farm-wood text-farm-parchment px-2 py-1 focus:outline-none focus:border-farm-grass"
+                />
+              </label>
+              <div className="flex items-center gap-2 text-xs">
+                <span>Pos:</span>
+                <label className="flex items-center gap-1">
+                  x
+                  <input
+                    type="number"
+                    step={1}
+                    value={Math.round(selectedSceneItem.x)}
+                    onChange={(e) => {
+                      const v = Number(e.target.value);
+                      if (!Number.isFinite(v)) return;
+                      onMoveSceneItem(selectedSceneItem.id, v, selectedSceneItem.y);
+                    }}
+                    className="w-16 bg-farm-ink border border-farm-wood text-farm-parchment px-1 tabular-nums"
+                  />
+                </label>
+                <label className="flex items-center gap-1">
+                  y
+                  <input
+                    type="number"
+                    step={1}
+                    value={Math.round(selectedSceneItem.y)}
+                    onChange={(e) => {
+                      const v = Number(e.target.value);
+                      if (!Number.isFinite(v)) return;
+                      onMoveSceneItem(selectedSceneItem.id, selectedSceneItem.x, v);
+                    }}
+                    className="w-16 bg-farm-ink border border-farm-wood text-farm-parchment px-1 tabular-nums"
+                  />
+                </label>
+                <label className="flex items-center gap-1 ml-auto">
+                  Size
+                  <input
+                    type="number"
+                    min={5}
+                    max={60}
+                    step={1}
+                    value={Math.round(selectedSceneItem.scale * 100)}
+                    onChange={(e) => {
+                      const pct = Number(e.target.value);
+                      if (!Number.isFinite(pct)) return;
+                      onUpdateSceneItemScale(
+                        selectedSceneItem.id,
+                        Math.max(0.05, Math.min(0.6, pct / 100))
+                      );
+                    }}
+                    className="w-12 bg-farm-ink border border-farm-wood text-farm-parchment px-1 tabular-nums"
+                  />
+                  %
+                </label>
+              </div>
+            </div>
+          ) : selectedSceneItem && selectedAsset ? (
+            <div className="border-2 border-farm-grass/60 bg-farm-ink/40 p-2 space-y-2 text-sm">
+              <div className="flex items-center gap-2">
+                <img
+                  src={selectedAsset.pixelUrl}
+                  alt=""
+                  className="pixelated w-12 h-12 object-contain bg-farm-ink"
+                />
+                <div className="flex-1 truncate" title={selectedAsset.prompt}>
+                  {selectedAsset.prompt}
+                </div>
+                <button
+                  onClick={() => onDeleteSceneItem(selectedSceneItem.id)}
+                  title="Remove from scene"
+                  className="px-2 py-0.5 border border-farm-wood/60 hover:border-red-700 hover:text-red-300"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <div className="flex items-center gap-2 text-xs">
+                <label className="flex items-center gap-1 flex-1">
+                  Size:
+                  <input
+                    type="range"
+                    min={0.05}
+                    max={0.6}
+                    step={0.01}
+                    value={selectedSceneItem.scale}
+                    onChange={(e) =>
+                      onUpdateSceneItemScale(selectedSceneItem.id, Number(e.target.value))
+                    }
+                    className="accent-farm-grass flex-1"
+                  />
+                  <input
+                    type="number"
+                    min={5}
+                    max={60}
+                    step={1}
+                    value={Math.round(selectedSceneItem.scale * 100)}
+                    onChange={(e) => {
+                      const pct = Number(e.target.value);
+                      if (!Number.isFinite(pct)) return;
+                      onUpdateSceneItemScale(
+                        selectedSceneItem.id,
+                        Math.max(0.05, Math.min(0.6, pct / 100))
+                      );
+                    }}
+                    className="w-12 bg-farm-ink border border-farm-wood text-farm-parchment px-1 text-right tabular-nums"
+                    title="Scale (percent of canvas)"
+                  />
+                  <span>%</span>
+                </label>
+              </div>
+
+              <div className="flex items-center gap-2 text-xs">
+                <span>Pos:</span>
+                <label className="flex items-center gap-1">
+                  x
+                  <input
+                    type="number"
+                    step={1}
+                    value={Math.round(selectedSceneItem.x)}
+                    onChange={(e) => {
+                      const v = Number(e.target.value);
+                      if (!Number.isFinite(v)) return;
+                      onMoveSceneItem(selectedSceneItem.id, v, selectedSceneItem.y);
+                    }}
+                    className="w-16 bg-farm-ink border border-farm-wood text-farm-parchment px-1 tabular-nums"
+                  />
+                </label>
+                <label className="flex items-center gap-1">
+                  y
+                  <input
+                    type="number"
+                    step={1}
+                    value={Math.round(selectedSceneItem.y)}
+                    onChange={(e) => {
+                      const v = Number(e.target.value);
+                      if (!Number.isFinite(v)) return;
+                      onMoveSceneItem(selectedSceneItem.id, selectedSceneItem.x, v);
+                    }}
+                    className="w-16 bg-farm-ink border border-farm-wood text-farm-parchment px-1 tabular-nums"
+                  />
+                </label>
+              </div>
+
+              <div className="flex items-center gap-2 text-xs">
+                <span>Layer:</span>
+                <button
+                  onClick={() => onBumpSceneItemZ(selectedSceneItem.id, -1)}
+                  className="px-2 py-0.5 border border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass"
+                >
+                  ⬇ Back
+                </button>
+                <button
+                  onClick={() => onBumpSceneItemZ(selectedSceneItem.id, 1)}
+                  className="px-2 py-0.5 border border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass"
+                >
+                  ⬆ Front
+                </button>
+                <span className="opacity-60 ml-auto">z={selectedSceneItem.z}</span>
+              </div>
+
+              <div className="flex items-center gap-2 text-xs">
+                <span>Flip:</span>
+                <button
+                  onClick={() => onToggleFlipX(selectedSceneItem.id)}
+                  title="Flip horizontally"
+                  className={`px-2 py-0.5 border ${
+                    selectedSceneItem.flipX
+                      ? "border-farm-grass text-farm-grass bg-farm-grass/10"
+                      : "border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass"
+                  }`}
+                >
+                  ▶◀ H
+                </button>
+                <button
+                  onClick={() => onToggleFlipY(selectedSceneItem.id)}
+                  title="Flip vertically"
+                  className={`px-2 py-0.5 border ${
+                    selectedSceneItem.flipY
+                      ? "border-farm-grass text-farm-grass bg-farm-grass/10"
+                      : "border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass"
+                  }`}
+                >
+                  ▲▼ V
+                </button>
+                <button
+                  onClick={() => onTogglePickable(selectedSceneItem.id)}
+                  title={
+                    selectedSceneItem.pickable
+                      ? "Pickable: player picks this up on contact"
+                      : "Mark as pickable"
+                  }
+                  className={`ml-2 px-2 py-0.5 border ${
+                    selectedSceneItem.pickable
+                      ? "border-farm-grass text-farm-grass bg-farm-grass/10"
+                      : "border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass"
+                  }`}
+                >
+                  🛒 Pickup
+                </button>
+              </div>
+
+              {/* Door / portal — link to another scene in this project. */}
+              <div className="flex items-center gap-2 text-xs">
+                <span title="Walking onto this in Play Mode switches to the linked scene">
+                  🚪 Door:
+                </span>
+                <select
+                  value={selectedSceneItem.linkSceneId || ""}
+                  onChange={(e) =>
+                    onSetLinkScene(selectedSceneItem.id, e.target.value || undefined)
+                  }
+                  className="bg-farm-ink border border-farm-wood text-farm-parchment px-1 py-0.5 flex-1"
+                >
+                  <option value="">(not a door)</option>
+                  {Object.values(scenes)
+                    .filter((s) => s.id !== activeScene.id)
+                    .map((s) => (
+                      <option key={s.id} value={s.id}>
+                        🎬 {s.name}
+                      </option>
+                    ))}
+                </select>
+              </div>
+
+              {/* NPC patrol path — only meaningful for characters/creatures. */}
+              {(selectedAsset.assetType === "character" ||
+                selectedAsset.assetType === "creature") && (
+                <div className="text-xs space-y-1">
+                  <div className="flex items-center gap-2">
+                    <span title="Walks between waypoints in Play Mode">🚶 Patrol:</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const cur = selectedSceneItem.patrol;
+                        const next = {
+                          points: [
+                            ...(cur?.points || []),
+                            { x: Math.round(selectedSceneItem.x), y: Math.round(selectedSceneItem.y) },
+                          ],
+                          loop: cur?.loop ?? true,
+                          speed: cur?.speed ?? 60,
+                        };
+                        onSetPatrol(selectedSceneItem.id, next);
+                      }}
+                      className="px-2 py-0.5 border border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass"
+                    >
+                      + Add waypoint at current pos
+                    </button>
+                    {selectedSceneItem.patrol && selectedSceneItem.patrol.points.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => onSetPatrol(selectedSceneItem.id, undefined)}
+                        className="px-2 py-0.5 border border-farm-wood/60 hover:border-red-700 hover:text-red-300"
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </div>
+                  {selectedSceneItem.patrol && selectedSceneItem.patrol.points.length > 0 && (
+                    <>
+                      <div className="flex items-center gap-2">
+                        <label className="flex items-center gap-1">
+                          <input
+                            type="checkbox"
+                            checked={selectedSceneItem.patrol.loop}
+                            onChange={(e) =>
+                              selectedSceneItem.patrol &&
+                              onSetPatrol(selectedSceneItem.id, {
+                                ...selectedSceneItem.patrol,
+                                loop: e.target.checked,
+                              })
+                            }
+                            className="accent-farm-grass"
+                          />
+                          loop
+                        </label>
+                        <label className="flex items-center gap-1">
+                          speed
+                          <input
+                            type="number"
+                            min={10}
+                            max={400}
+                            value={selectedSceneItem.patrol.speed}
+                            onChange={(e) =>
+                              selectedSceneItem.patrol &&
+                              onSetPatrol(selectedSceneItem.id, {
+                                ...selectedSceneItem.patrol,
+                                speed: Math.max(1, Number(e.target.value) || 60),
+                              })
+                            }
+                            className="w-16 bg-farm-ink border border-farm-wood text-farm-parchment px-1 tabular-nums"
+                          />
+                          px/s
+                        </label>
+                      </div>
+                      <div className="space-y-0.5 max-h-32 overflow-y-auto">
+                        {selectedSceneItem.patrol.points.map((p, i) => (
+                          <div key={i} className="flex items-center gap-1 opacity-80">
+                            <span className="opacity-60 w-6 tabular-nums">{i + 1}.</span>
+                            <span className="tabular-nums">
+                              ({Math.round(p.x)}, {Math.round(p.y)})
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const cur = selectedSceneItem.patrol;
+                                if (!cur) return;
+                                const next = {
+                                  ...cur,
+                                  points: cur.points.filter((_, idx) => idx !== i),
+                                };
+                                onSetPatrol(
+                                  selectedSceneItem.id,
+                                  next.points.length === 0 ? undefined : next
+                                );
+                              }}
+                              className="ml-auto px-1 border border-farm-wood/60 hover:border-red-700 hover:text-red-300"
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+
+              {(selectedAsset.cols || 1) * (selectedAsset.rows || 1) > 1 && (
+                <div className="text-xs">
+                  <button
+                    onClick={() => onToggleAnimating(selectedSceneItem.id)}
+                    className={`px-2 py-0.5 border ${
+                      selectedSceneItem.animating
+                        ? "border-farm-grass text-farm-grass bg-farm-grass/10"
+                        : "border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass"
+                    }`}
+                  >
+                    {selectedSceneItem.animating ? "⏸ Stop" : "▶ Animate"}
+                  </button>
+                </div>
+              )}
+
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={replacePrompt}
+                  onChange={(e) => setReplacePrompt(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      onReplaceItem();
+                    }
+                  }}
+                  placeholder="Replace with… (uses project style)"
+                  className="flex-1 bg-farm-ink/60 border border-farm-wood p-1 text-sm focus:outline-none focus:border-farm-grass"
+                />
+                <button
+                  onClick={onReplaceItem}
+                  disabled={!replacePrompt.trim()}
+                  className="px-2 py-0.5 border border-farm-grass text-farm-grass hover:bg-farm-grass/10 disabled:opacity-40"
+                >
+                  Replace
+                </button>
+              </div>
+            </div>
+          ) : selectedSceneItemIds.length > 1 ? (
+            <div className="border-2 border-farm-grass/60 bg-farm-ink/40 p-2 text-xs flex items-center gap-2 flex-wrap">
+              <span><span className="text-farm-grass">{selectedSceneItemIds.length}</span> items selected · drag to move group</span>
+              <button
+                type="button"
+                onClick={() => {
+                  const name = prompt("Name this prefab:", "")?.trim();
+                  if (!name) return;
+                  const items = activeScene.items.filter((it) =>
+                    selectedSceneItemIds.includes(it.id)
+                  );
+                  if (items.length > 0) onSavePrefab(name, items);
+                }}
+                className="ml-auto px-2 py-0.5 border border-farm-grass/70 text-farm-grass hover:bg-farm-grass/10"
+              >
+                💾 Save as prefab
+              </button>
+            </div>
+          ) : (
+            <div className="text-xs opacity-60 text-center py-2">
+              Click an item to select. Shift-click or drag-rectangle for multi-select. Middle-click drag to pan.
+            </div>
+          )}
+          </>}
+        </>
+      ) : (
+        <div className="opacity-60 text-center py-12">Pick a scene above.</div>
+      )}
+    </div>
+  );
+}
+
+function PrefabLibrary({
+  prefabs,
+  onDelete,
+  onSync,
+}: {
+  prefabs: Record<string, Prefab>;
+  onDelete: (id: string) => void;
+  onSync: (id: string) => void;
+}) {
+  const list = Object.values(prefabs).sort((a, b) => a.createdAt - b.createdAt);
+  if (list.length === 0) return null;
+  return (
+    <div className="border-2 border-farm-wood/60 bg-farm-ink/30 p-2 text-xs space-y-1">
+      <div className="flex items-center justify-between mb-1">
+        <span className="font-pixel text-farm-sky">📦 Prefabs ({list.length})</span>
+        <span className="opacity-50 text-[10px]">drag onto canvas to instantiate</span>
+      </div>
+      {list.map((p) => (
+        <div
+          key={p.id}
+          draggable
+          onDragStart={(e) => {
+            e.dataTransfer.setData("application/x-pwf-prefab-id", p.id);
+            e.dataTransfer.effectAllowed = "copy";
+          }}
+          className="flex items-center gap-2 p-1 cursor-grab hover:bg-farm-wood/20"
+        >
+          <span className="opacity-40 select-none">📦</span>
+          <span className="flex-1 truncate" title={p.name}>{p.name}</span>
+          <span className="opacity-50 tabular-nums">{p.items.length} items</span>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onSync(p.id); }}
+            title="Push master changes to all instances of this prefab"
+            className="px-1 border border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass"
+          >
+            🔄
+          </button>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              if (!confirm(`Delete prefab "${p.name}"? Existing instances stay.`)) return;
+              onDelete(p.id);
+            }}
+            className="px-1 border border-farm-wood/60 hover:border-red-700 hover:text-red-300"
+          >
+            ✕
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function TilePaintBar({
+  scene,
+  tileAssets,
+  paintMode,
+  onPaintModeChange,
+  activeTileLayerId,
+  onActiveTileLayerChange,
+  onAddTileLayer,
+  onRemoveTileLayer,
+  onRenameTileLayer,
+  onSetLayerTileAsset,
+  onToggleLayerVisible,
+  onReorderTileLayers,
+  onSetTileSize,
+}: {
+  scene: Scene;
+  tileAssets: Asset[];
+  paintMode: "off" | "paint" | "erase";
+  onPaintModeChange: (m: "off" | "paint" | "erase") => void;
+  activeTileLayerId: string | null;
+  onActiveTileLayerChange: (id: string | null) => void;
+  onAddTileLayer: (tileAssetId?: string) => void;
+  onRemoveTileLayer: (layerId: string) => void;
+  onRenameTileLayer: (layerId: string, name: string) => void;
+  onSetLayerTileAsset: (layerId: string, tileAssetId: string) => void;
+  onToggleLayerVisible: (layerId: string) => void;
+  onReorderTileLayers: (from: number, to: number) => void;
+  onSetTileSize: (n: number) => void;
+}) {
+  const tg = scene.tileGrid;
+  const layers = tg?.layers || [];
+  const activeLayer = activeTileLayerId
+    ? layers.find((l) => l.id === activeTileLayerId)
+    : null;
+
+  return (
+    <div className="border-2 border-farm-wood/60 bg-farm-ink/30 p-2 text-xs space-y-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-pixel text-farm-sky">🎨 Tiles</span>
+        <button
+          type="button"
+          onClick={() => onPaintModeChange(paintMode === "paint" ? "off" : "paint")}
+          disabled={!activeLayer || !activeLayer.tileAssetId}
+          title="Click+drag on canvas to stamp the active tile"
+          className={`px-2 py-0.5 border ${
+            paintMode === "paint"
+              ? "border-farm-grass text-farm-grass bg-farm-grass/10"
+              : "border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass"
+          } disabled:opacity-40 disabled:cursor-not-allowed`}
+        >
+          ✏️ Paint
+        </button>
+        <button
+          type="button"
+          onClick={() => onPaintModeChange(paintMode === "erase" ? "off" : "erase")}
+          disabled={!activeLayer}
+          className={`px-2 py-0.5 border ${
+            paintMode === "erase"
+              ? "border-farm-grass text-farm-grass bg-farm-grass/10"
+              : "border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass"
+          } disabled:opacity-40 disabled:cursor-not-allowed`}
+        >
+          🧽 Erase
+        </button>
+        <label className="flex items-center gap-1 ml-auto">
+          Tile size:
+          <input
+            type="number"
+            min={8}
+            max={256}
+            step={4}
+            value={tg?.tileSize || 32}
+            onChange={(e) => onSetTileSize(Number(e.target.value) || 32)}
+            className="w-14 bg-farm-ink border border-farm-wood text-farm-parchment px-1 tabular-nums"
+          />
+          px
+        </label>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={() => onAddTileLayer(tileAssets[0]?.id)}
+          className="px-2 py-0.5 border border-farm-grass/70 text-farm-grass hover:bg-farm-grass/10"
+        >
+          + Layer
+        </button>
+        {layers.length === 0 && (
+          <span className="opacity-60">Add a layer to start painting tiles.</span>
+        )}
+      </div>
+      {layers.length > 0 && (
+        <div className="space-y-0.5">
+          {layers.map((l, idx) => {
+            const isActive = l.id === activeTileLayerId;
+            return (
+              <div
+                key={l.id}
+                draggable
+                onDragStart={(e) => {
+                  e.dataTransfer.setData("application/x-pwf-tile-layer", String(idx));
+                }}
+                onDragOver={(e) => {
+                  if (e.dataTransfer.types.includes("application/x-pwf-tile-layer")) {
+                    e.preventDefault();
+                  }
+                }}
+                onDrop={(e) => {
+                  const from = Number(e.dataTransfer.getData("application/x-pwf-tile-layer"));
+                  if (Number.isFinite(from) && from !== idx) onReorderTileLayers(from, idx);
+                }}
+                onClick={() => onActiveTileLayerChange(l.id)}
+                className={`flex items-center gap-2 p-1 cursor-pointer ${
+                  isActive
+                    ? "bg-farm-sky/15 border-l-2 border-farm-sky"
+                    : "hover:bg-farm-wood/20"
+                }`}
+              >
+                <span className="opacity-40 cursor-grab select-none">☰</span>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onToggleLayerVisible(l.id);
+                  }}
+                  title={l.visible ? "Hide" : "Show"}
+                  className={`px-1 border ${
+                    l.visible
+                      ? "border-farm-grass text-farm-grass"
+                      : "border-farm-wood/60 opacity-60"
+                  }`}
+                >
+                  {l.visible ? "👁" : "—"}
+                </button>
+                <input
+                  type="text"
+                  value={l.name}
+                  onClick={(e) => e.stopPropagation()}
+                  onChange={(e) => onRenameTileLayer(l.id, e.target.value)}
+                  className="flex-1 bg-transparent border-b border-farm-wood/40 px-1 focus:outline-none focus:border-farm-grass"
+                />
+                <select
+                  value={l.tileAssetId}
+                  onClick={(e) => e.stopPropagation()}
+                  onChange={(e) => onSetLayerTileAsset(l.id, e.target.value)}
+                  className="bg-farm-ink border border-farm-wood text-farm-parchment px-1 max-w-[140px]"
+                >
+                  <option value="">— pick a tile —</option>
+                  {tileAssets.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.name || a.prompt}
+                    </option>
+                  ))}
+                </select>
+                <span className="opacity-50 tabular-nums">{l.cells.length}</span>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (!confirm(`Remove layer "${l.name}"?`)) return;
+                    onRemoveTileLayer(l.id);
+                  }}
+                  className="px-1 border border-farm-wood/60 hover:border-red-700 hover:text-red-300"
+                >
+                  ✕
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SceneHierarchy({
+  scene,
+  assets,
+  selectedItemId,
+  onSelect,
+  onReorder,
+  onDelete,
+  onDuplicate,
+  onToggleAnim,
+  onToggleSolid,
+  onToggleFlipX,
+  onToggleFlipY,
+  onTogglePickable,
+}: {
+  scene: Scene;
+  assets: Record<string, Asset>;
+  selectedItemId: string | null;
+  onSelect: (id: string | null) => void;
+  onReorder: (from: number, to: number) => void;
+  onDelete: (id: string) => void;
+  onDuplicate: (id: string) => void;
+  onToggleAnim: (id: string) => void;
+  onToggleSolid: (id: string) => void;
+  onToggleFlipX: (id: string) => void;
+  onToggleFlipY: (id: string) => void;
+  onTogglePickable: (id: string) => void;
+}) {
+  const sorted = [...scene.items].sort((a, b) => b.z - a.z); // front first
+  const [dragRow, setDragRow] = useState<number | null>(null);
+  const [hoverRow, setHoverRow] = useState<number | null>(null);
+
+  if (sorted.length === 0) return null;
+
+  return (
+    <div className="border-2 border-farm-wood/60 bg-farm-ink/30 p-2 text-xs">
+      <div className="flex items-center justify-between mb-1">
+        <span className="opacity-70">📋 Items ({sorted.length}) — front to back</span>
+        <span className="opacity-50 text-[10px]">drag to reorder</span>
+      </div>
+      <div className="space-y-0.5">
+        {sorted.map((it, idx) => {
+          const a = assets[it.assetId];
+          const isMulti = (a?.cols || 1) * (a?.rows || 1) > 1;
+          const isSelected = it.id === selectedItemId;
+          return (
+            <div
+              key={it.id}
+              draggable
+              onDragStart={(e) => {
+                setDragRow(idx);
+                e.dataTransfer.effectAllowed = "move";
+                // Mark this drag as a hierarchy reorder, not an asset-from-gallery drag.
+                e.dataTransfer.setData("application/x-pwf-hierarchy", String(idx));
+              }}
+              onDragOver={(e) => {
+                if (dragRow === null) return;
+                e.preventDefault();
+                e.dataTransfer.dropEffect = "move";
+                setHoverRow(idx);
+              }}
+              onDragLeave={() => {
+                if (hoverRow === idx) setHoverRow(null);
+              }}
+              onDrop={(e) => {
+                e.preventDefault();
+                if (dragRow !== null && dragRow !== idx) {
+                  onReorder(dragRow, idx);
+                }
+                setDragRow(null);
+                setHoverRow(null);
+              }}
+              onDragEnd={() => {
+                setDragRow(null);
+                setHoverRow(null);
+              }}
+              onClick={() => onSelect(it.id)}
+              className={`flex items-center gap-2 p-1 cursor-pointer ${
+                isSelected
+                  ? "bg-farm-grass/15 border-l-2 border-farm-grass"
+                  : "hover:bg-farm-wood/20"
+              } ${hoverRow === idx ? "ring-1 ring-farm-grass/40" : ""}`}
+            >
+              <span className="opacity-40 cursor-grab select-none">☰</span>
+              {a && (
+                <img
+                  src={a.pixelUrl}
+                  alt=""
+                  className="pixelated w-6 h-6 object-contain bg-farm-ink/60 flex-shrink-0"
+                />
+              )}
+              <span className="flex-1 truncate" title={a?.prompt}>
+                {a?.name || a?.prompt || "(missing asset)"}
+              </span>
+              <span className="opacity-50 text-[10px] tabular-nums">
+                z{it.z} · {Math.round(it.scale * 100)}%
+              </span>
+              {isMulti && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onToggleAnim(it.id);
+                  }}
+                  title={it.animating ? "Stop animation" : "Play animation"}
+                  className={`px-1 border ${
+                    it.animating
+                      ? "border-farm-grass text-farm-grass"
+                      : "border-farm-wood/60"
+                  }`}
+                >
+                  {it.animating ? "⏸" : "▶"}
+                </button>
+              )}
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleSolid(it.id);
+                }}
+                title={
+                  it.solid
+                    ? "Solid: blocks the player in Play Mode"
+                    : "Passable: player walks through"
+                }
+                className={`px-1 border ${
+                  it.solid ? "border-farm-grass text-farm-grass" : "border-farm-wood/60 opacity-60"
+                }`}
+              >
+                {it.solid ? "🧱" : "·"}
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleFlipX(it.id);
+                }}
+                title={it.flipX ? "Flipped horizontally" : "Flip horizontally"}
+                className={`px-1 border ${
+                  it.flipX ? "border-farm-grass text-farm-grass" : "border-farm-wood/60 opacity-60"
+                }`}
+              >
+                ▶◀
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleFlipY(it.id);
+                }}
+                title={it.flipY ? "Flipped vertically" : "Flip vertically"}
+                className={`px-1 border ${
+                  it.flipY ? "border-farm-grass text-farm-grass" : "border-farm-wood/60 opacity-60"
+                }`}
+              >
+                ▲▼
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onTogglePickable(it.id);
+                }}
+                title={it.pickable ? "Pickable in Play Mode" : "Not pickable"}
+                className={`px-1 border ${
+                  it.pickable ? "border-farm-grass text-farm-grass" : "border-farm-wood/60 opacity-60"
+                }`}
+              >
+                🛒
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onDuplicate(it.id);
+                }}
+                title="Duplicate (⌘D)"
+                className="px-1 border border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass"
+              >
+                ⎘
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onDelete(it.id);
+                }}
+                title="Delete (Del)"
+                className="px-1 border border-farm-wood/60 hover:border-red-700 hover:text-red-300"
+              >
+                ✕
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function AssetCard({
+  asset,
+  onDownloadPNG,
+  onDownloadFrames,
+  onUseAsReference,
+  onUseAsProjectStyle,
+  onRepixelate,
+  onMakeSeamless,
+  onDelete,
+  onRename,
+  onSetTags,
+  onApplyPalette,
+  onDragStart,
+  onDragEnd,
+  onSetAsSceneBackground,
+  sceneActive,
+}: {
+  asset: Asset;
+  onDownloadPNG: () => void;
+  onDownloadFrames: () => void;
+  onUseAsReference: () => void;
+  onUseAsProjectStyle: () => void;
+  onRepixelate: (g: number) => void;
+  onMakeSeamless: () => void;
+  onDelete: () => void;
+  onRename: (name: string) => void;
+  onSetTags: (tags: string[]) => void;
+  onApplyPalette: () => void;
+  onDragStart: () => void;
+  onDragEnd: () => void;
+  onSetAsSceneBackground: () => void;
+  sceneActive: boolean;
+}) {
+  const [w, h] = parseSize(asset.sourceSize);
+  const aspect = `${w} / ${h}`;
+  const isMultiFrame = (asset.cols || 1) * (asset.rows || 1) > 1;
+  const isTile = asset.assetType === "tile";
+
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState(asset.name || "");
+  const [tagInput, setTagInput] = useState("");
+  const [playing, setPlaying] = useState(false);
+  const [frameIdx, setFrameIdx] = useState(0);
+  const [frames, setFrames] = useState<string[] | null>(null);
+
+  useEffect(() => {
+    if (!playing || !frames) return;
+    const id = setInterval(() => {
+      setFrameIdx((i) => (i + 1) % frames.length);
+    }, 1000 / 8);
+    return () => clearInterval(id);
+  }, [playing, frames]);
+
+  async function togglePlay() {
+    if (playing) {
+      setPlaying(false);
+      return;
+    }
+    if (!frames) {
+      const sliced = await sliceSheet(asset.rawUrl, asset.cols, asset.rows);
+      setFrames(sliced);
+    }
+    setFrameIdx(0);
+    setPlaying(true);
+  }
+
+  function commitTagInput() {
+    const v = tagInput.trim();
+    if (!v) return;
+    onSetTags([...(asset.tags || []), ...v.split(",").map((s) => s.trim()).filter(Boolean)]);
+    setTagInput("");
+  }
+  function removeTag(t: string) {
+    onSetTags((asset.tags || []).filter((x) => x !== t));
+  }
+
+  return (
+    <div
+      className="group bg-farm-ink/60 border-2 border-farm-wood p-2 flex flex-col gap-2 relative"
+      draggable
+      onDragStart={(e) => {
+        e.dataTransfer.setData("application/x-pwf-asset-id", asset.id);
+        e.dataTransfer.effectAllowed = "copy";
+        onDragStart();
+      }}
+      onDragEnd={onDragEnd}
+    >
+      <button
+        onClick={onDelete}
+        title="Delete"
+        className="absolute top-1 right-1 z-10 w-6 h-6 flex items-center justify-center text-sm bg-farm-ink/80 border border-farm-wood/60 opacity-0 group-hover:opacity-100 hover:border-red-700 hover:text-red-300 transition"
+      >
+        ✕
+      </button>
+
+      {isTile ? (
+        <div
+          style={{
+            backgroundImage: `url(${asset.pixelUrl})`,
+            backgroundSize: "33.333% 33.333%",
+            backgroundRepeat: "repeat",
+            imageRendering: "pixelated",
+          }}
+          className="aspect-square border border-farm-wood/40"
+          title="3×3 tiled preview"
+        />
+      ) : (
+        <div className="relative">
+          <div
+            style={{
+              aspectRatio:
+                playing && frames ? `${w / asset.cols} / ${h / asset.rows}` : aspect,
+            }}
+            className="bg-checker flex items-center justify-center overflow-hidden"
+          >
+            <img
+              src={playing && frames ? frames[frameIdx] : asset.pixelUrl}
+              alt={asset.prompt}
+              className="pixelated max-w-full max-h-full"
+            />
+          </div>
+          {isMultiFrame && (
+            <button
+              onClick={togglePlay}
+              title={playing ? "Stop animation" : "Play animation"}
+              className="absolute bottom-1 right-1 w-6 h-6 flex items-center justify-center text-xs bg-farm-ink/80 border border-farm-grass/70 text-farm-grass hover:bg-farm-grass/20"
+            >
+              {playing ? "⏸" : "▶"}
+            </button>
+          )}
+          {isMultiFrame && asset.lowVariety && (
+            <div
+              title="Frames look near-identical — gpt-image-1 didn't actually vary the cells. Regenerate (try a more directional prompt, or drop to 1×1) for a usable sheet."
+              className="absolute top-1 left-1 px-1 py-0.5 text-[10px] bg-yellow-900/80 border border-yellow-500/70 text-yellow-200 cursor-help"
+            >
+              ⚠ low variety
+            </div>
+          )}
+        </div>
+      )}
+
+      {editingName ? (
+        <input
+          autoFocus
+          type="text"
+          value={nameDraft}
+          onChange={(e) => setNameDraft(e.target.value)}
+          onBlur={() => {
+            onRename(nameDraft);
+            setEditingName(false);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              onRename(nameDraft);
+              setEditingName(false);
+            } else if (e.key === "Escape") {
+              setNameDraft(asset.name || "");
+              setEditingName(false);
+            }
+          }}
+          placeholder={asset.prompt}
+          className="text-xs bg-farm-ink/80 border border-farm-grass text-farm-parchment px-1 py-0.5 focus:outline-none"
+        />
+      ) : (
+        <div
+          onClick={() => {
+            setNameDraft(asset.name || "");
+            setEditingName(true);
+          }}
+          title="Click to rename"
+          className="text-xs opacity-90 truncate cursor-text hover:text-farm-grass"
+        >
+          {asset.name || asset.prompt}
+        </div>
+      )}
+
+      {(asset.perspective || asset.pose) && (
+        <div className="text-[10px] opacity-50 truncate">
+          {[
+            asset.perspective,
+            asset.pose && asset.pose !== "single" ? `${asset.cols}×${asset.rows} ${asset.pose}` : null,
+            asset.editedFrom ? "✏️ edited" : null,
+          ]
+            .filter(Boolean)
+            .join(" · ")}
+        </div>
+      )}
+
+      {/* Tags row */}
+      <div className="flex flex-wrap items-center gap-1 text-[10px]">
+        {(asset.tags || []).map((t) => (
+          <span
+            key={t}
+            className="inline-flex items-center gap-1 bg-farm-grass/10 border border-farm-grass/60 text-farm-grass px-1"
+          >
+            #{t}
+            <button onClick={() => removeTag(t)} className="opacity-60 hover:opacity-100">
+              ×
+            </button>
+          </span>
+        ))}
+        <input
+          type="text"
+          value={tagInput}
+          onChange={(e) => setTagInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === ",") {
+              e.preventDefault();
+              commitTagInput();
+            }
+          }}
+          onBlur={commitTagInput}
+          placeholder="+ tag"
+          className="bg-transparent border-b border-farm-wood/40 px-1 py-0 w-12 focus:outline-none focus:border-farm-grass"
+        />
+      </div>
+
+      <div className="flex items-center justify-between text-xs">
+        <select
+          value={asset.gridSize}
+          onChange={(e) => onRepixelate(Number(e.target.value))}
+          className="bg-farm-ink border border-farm-wood text-farm-parchment px-1"
+          title="Pixel snap"
+        >
+          {GRID_PRESETS.map((g) => (
+            <option key={g} value={g}>
+              {gridLabel(g)}
+            </option>
+          ))}
+        </select>
+        <div className="flex gap-1">
+          <button
+            onClick={onUseAsReference}
+            title="Edit this asset"
+            className="px-1.5 py-0.5 border border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass"
+          >
+            ✏️
+          </button>
+          <button
+            onClick={onUseAsProjectStyle}
+            title="Use as project style reference"
+            className="px-1.5 py-0.5 border border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass"
+          >
+            🎨
+          </button>
+          <button
+            onClick={onApplyPalette}
+            title="Snap to palette (NES, GameBoy, Pico-8…)"
+            className="px-1.5 py-0.5 border border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass"
+          >
+            🎨🎯
+          </button>
+          {isTile && (
+            <>
+              <button
+                onClick={onMakeSeamless}
+                title="Make seamlessly tileable (offset+blend)"
+                className="px-1.5 py-0.5 border border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass"
+              >
+                🧵
+              </button>
+              {sceneActive && (
+                <button
+                  onClick={onSetAsSceneBackground}
+                  title="Use as background for the active scene"
+                  className="px-1.5 py-0.5 border border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass"
+                >
+                  🪟
+                </button>
+              )}
+            </>
+          )}
+          <button
+            onClick={onDownloadPNG}
+            title="Download PNG"
+            className="px-1.5 py-0.5 border border-farm-grass text-farm-grass hover:bg-farm-grass/10"
+          >
+            ⬇
+          </button>
+          {isMultiFrame && (
+            <button
+              onClick={onDownloadFrames}
+              title="Download frames + atlas (zip)"
+              className="px-1.5 py-0.5 border border-farm-grass text-farm-grass hover:bg-farm-grass/10"
+            >
+              📦
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ----------------------------------------------------------- helpers
+
+function defaultSolid(t: AssetType): boolean {
+  // Buildings, tiles-as-objects (rare), and creatures act as obstacles.
+  // Items, UI icons, and characters are passable.
+  return t === "building" || t === "creature";
+}
+
+function parseSize(s: string | undefined): [number, number] {
+  if (!s) return [1024, 1024];
+  const [w, h] = s.split("x").map(Number);
+  return [w || 1024, h || 1024];
+}
+
+async function applyPixelate(rawUrl: string, gridSize: number, sourceSize: string | undefined) {
+  if (gridSize === 0) return rawUrl;
+  const [w, h] = parseSize(sourceSize);
+  const ratio = w / h;
+  return await pixelateImageUrl(rawUrl, {
+    gridSize,
+    gridSizeY: Math.round(gridSize / ratio),
+    outputSize: 512,
+  });
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+function drawWithFlip(
+  ctx: CanvasRenderingContext2D,
+  img: HTMLImageElement,
+  cx: number,
+  cy: number,
+  w: number,
+  h: number,
+  flipX?: boolean,
+  flipY?: boolean,
+  rotationDeg?: number
+) {
+  if (!flipX && !flipY && !rotationDeg) {
+    ctx.drawImage(img, cx - w / 2, cy - h / 2, w, h);
+    return;
+  }
+  ctx.save();
+  ctx.translate(cx, cy);
+  if (rotationDeg) ctx.rotate((rotationDeg * Math.PI) / 180);
+  ctx.scale(flipX ? -1 : 1, flipY ? -1 : 1);
+  ctx.drawImage(img, -w / 2, -h / 2, w, h);
+  ctx.restore();
+}
+
+function loadImg(url: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = url;
+  });
+}
+
+function dataUrlToBytes(url: string): Uint8Array {
+  const b64 = url.split(",")[1];
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+function slugify(name: string): string {
+  return (name || "scene").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "scene";
+}
+
+async function downscaleImage(url: string, maxSize: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      const ratio = Math.min(1, maxSize / Math.max(img.naturalWidth, img.naturalHeight));
+      const w = Math.round(img.naturalWidth * ratio);
+      const h = Math.round(img.naturalHeight * ratio);
+      const canvas = document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext("2d")!;
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(img, 0, 0, w, h);
+      resolve(canvas.toDataURL("image/png"));
+    };
+    img.onerror = reject;
+    img.src = url;
+  });
+}
