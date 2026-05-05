@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
-export const maxDuration = 180;
+// 60s is Vercel Hobby's hard cap. Pro/Enterprise can raise this to 300s.
+// Single-asset generations finish in ~20-40s; split-items with the style-lock
+// chain pushes to ~50-60s, so we sit right at the limit by default.
+export const maxDuration = 60;
 
 type AssetType = "character" | "item" | "tile" | "building" | "creature" | "ui";
 type Perspective = "top-down" | "side-view";

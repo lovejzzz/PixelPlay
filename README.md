@@ -11,6 +11,24 @@ and never sees it server-side.
 
 ## Quick start
 
+### Deploy to the cloud (recommended)
+
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Flovejzzz%2FPixelPlay&project-name=pixel-play&repository-name=pixel-play)
+
+One click → Vercel imports the repo and gives you a public URL in under a
+minute. No env vars needed; everyone who visits sets their own OpenAI key in
+the in-app ⚙ Settings (stored in their browser).
+
+> Heads up: Vercel's **Hobby** plan caps serverless functions at 60 s, which
+> is plenty for single-asset generations and tight for split-items scenes.
+> If you hit timeouts on big scenes, upgrade to Pro and bump
+> `maxDuration` in `app/api/generate/route.ts` up to 300.
+
+GitHub Pages won't work — Pages is static-only and Pixel Play has Next.js
+API routes that proxy to OpenAI (CORS blocks direct browser→OpenAI calls).
+
+### Run locally
+
 ```bash
 git clone https://github.com/lovejzzz/PixelPlay.git
 cd PixelPlay
