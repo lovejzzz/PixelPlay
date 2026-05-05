@@ -6,7 +6,6 @@ import { buildSpriteZip, sliceSheet } from "./lib/sprites";
 import { checkSheetVariety } from "./lib/varietyCheck";
 import { idbGet, idbSet } from "./lib/storage";
 import { makeSeamless } from "./lib/seamless";
-import { MaskPainter } from "./components/MaskPainter";
 import { SceneCanvas, type CanvasAsset } from "./components/SceneCanvas";
 import { ScenePlayer } from "./components/ScenePlayer";
 import JSZip from "jszip";
@@ -170,13 +169,15 @@ type RightTab = "assets" | "scenes";
 
 // ----------------------------------------------------------- constants
 
-const ASSET_TYPES: { value: AssetType; label: string; emoji: string }[] = [
-  { value: "character", label: "Character", emoji: "🧑‍🌾" },
-  { value: "item", label: "Item", emoji: "🌽" },
-  { value: "tile", label: "Tile", emoji: "🟫" },
-  { value: "building", label: "Building", emoji: "🏠" },
-  { value: "creature", label: "Creature", emoji: "🐔" },
-  { value: "ui", label: "UI Icon", emoji: "🔔" },
+/** UI-level generation modes. Character keeps pose / walk-cycle controls;
+ *  Item is anything else single-sprite; Scene runs split-items + auto-compose.
+ *  Internal Asset.assetType stays in the older 6-value union for backwards
+ *  compat with legacy assets in IDB. */
+type GenMode = "character" | "item" | "scene";
+const GEN_MODES: { value: GenMode; label: string; emoji: string; hint: string }[] = [
+  { value: "character", label: "Character", emoji: "🧑‍🌾", hint: "A single character — pose / walk-cycle options apply" },
+  { value: "item", label: "Item", emoji: "🌽", hint: "One sprite — prop, tile, building, creature, anything" },
+  { value: "scene", label: "Scene", emoji: "🎬", hint: "Multi-asset scene: parsed into 3-8 items, composed onto a scene canvas" },
 ];
 
 const PERSPECTIVES: { value: Perspective; label: string }[] = [
@@ -252,44 +253,44 @@ export default function Home() {
     {
       role: "assistant",
       text:
-        "Welcome to Pixel Play. Describe an asset, click ✏️ on an existing one to edit it, or paint a region for inpainting. All assets ship transparent.",
+        "Welcome to Pixel Play. Pick Character / Item / Scene, describe what you want, and click FORGE. To tweak an existing asset, click ✏️ on its card and type the change.",
     },
   ]);
   const STARTER_PROMPTS: Array<{
     label: string;
     prompt: string;
-    type: AssetType;
-    split?: boolean;
-    auto?: boolean;
+    mode: GenMode;
     pose?: Pose;
     perspective?: Perspective;
   }> = [
-    { label: "🌽 a magic glowing carrot", prompt: "a magic glowing carrot with sparkles", type: "item" },
-    { label: "🧑‍🌾 farmer walk-cycle", prompt: "a young farmer in overalls and a straw hat", type: "character", pose: "walk-cycle" },
-    { label: "🏠 cozy farmhouse", prompt: "a small cozy farmhouse with a chimney and red roof", type: "building" },
-    { label: "🟫 grass tile", prompt: "lush green grass with tiny flowers", type: "tile" },
-    { label: "🎬 bedroom scene", prompt: "a cozy bedroom with all the furniture", type: "item", split: true, auto: true },
-    { label: "🐔 sleepy chicken", prompt: "a fluffy little chicken sitting", type: "creature" },
+    { label: "🌽 a magic glowing carrot", prompt: "a magic glowing carrot with sparkles", mode: "item" },
+    { label: "🧑‍🌾 farmer walk-cycle", prompt: "a young farmer in overalls and a straw hat", mode: "character", pose: "walk-cycle" },
+    { label: "🏠 cozy farmhouse", prompt: "a small cozy farmhouse with a chimney and red roof", mode: "item" },
+    { label: "🟫 grass tile", prompt: "lush green grass with tiny flowers", mode: "item" },
+    { label: "🎬 bedroom scene", prompt: "a cozy bedroom with all the furniture", mode: "scene" },
+    { label: "🐔 sleepy chicken", prompt: "a fluffy little chicken sitting", mode: "item" },
   ];
 
   const [projects, setProjects] = useState<Record<string, Project>>({});
   const [currentId, setCurrentId] = useState<string>("");
 
   const [input, setInput] = useState("");
-  const [assetType, setAssetType] = useState<AssetType>("item");
+  const [genMode, setGenMode] = useState<GenMode>("item");
   const [perspective, setPerspective] = useState<Perspective>("top-down");
   const [pose, setPose] = useState<Pose>("single");
   const [gridSize, setGridSize] = useState(0);
   const [quality, setQuality] = useState<Quality>("medium");
   const [variants, setVariants] = useState(1);
-  const [mode, setMode] = useState<Mode>("generate");
-  const [editRefUrl, setEditRefUrl] = useState<string | null>(null);
-  const [editRefName, setEditRefName] = useState<string | null>(null);
-  const [maskUrl, setMaskUrl] = useState<string | null>(null);
-  const [showMaskPainter, setShowMaskPainter] = useState(false);
   const [styleOpen, setStyleOpen] = useState(false);
-  const [splitItems, setSplitItems] = useState(false);
-  const [autoCompose, setAutoCompose] = useState(true);
+  /** When ON and there's an active scene, generated items get dropped onto
+   *  the scene immediately instead of just sitting in the gallery. */
+  const [addToScene, setAddToScene] = useState(true);
+  /** Per-card inline edit: which asset is currently being edited, and the
+   *  prompt the user is typing. Hoisted so the card can be controlled and
+   *  the actual /api/generate call is made by the parent. */
+  const [editingAssetId, setEditingAssetId] = useState<string | null>(null);
+  const [editPrompt, setEditPrompt] = useState("");
+  const [editingBusy, setEditingBusy] = useState(false);
   const [rightTab, setRightTab] = useState<RightTab>("assets");
   const [activeSceneId, setActiveSceneId] = useState<string | null>(null);
   const [selectedSceneItemIds, setSelectedSceneItemIds] = useState<string[]>([]);
@@ -712,43 +713,33 @@ export default function Home() {
 
   // ------------- handlers -------------
 
-  function clearEditRef() {
-    setEditRefUrl(null);
-    setEditRefName(null);
-    setMaskUrl(null);
-    setShowMaskPainter(false);
-  }
-
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     const prompt = input.trim();
     if (!prompt || busy) return;
-    if (mode === "edit" && !editRefUrl) {
-      alert("Edit mode needs a reference image. Pick one from the gallery or upload.");
-      return;
-    }
 
     setBusy(true);
     pushPromptHistory(prompt);
     setInput("");
-    const effectivePose = assetType === "character" ? pose : "single";
-    const isSplit = mode === "generate" && splitItems;
+    const isCharacter = genMode === "character";
+    const effectivePose = isCharacter ? pose : "single";
+    const isScene = genMode === "scene";
+
+    // Internal Asset.assetType: characters get "character" so existing
+    // character-aware code (ensurePlayerCharacter, scene player, walk-cycle
+    // detection) keeps working. Everything else collapses to "item".
+    const newAssetType: AssetType = isCharacter ? "character" : "item";
 
     setMessages((m) => [
       ...m,
-      { role: "user", text: prompt, assetType, perspective, pose: effectivePose, mode },
+      { role: "user", text: prompt, assetType: newAssetType, perspective, pose: effectivePose, mode: "generate" },
     ]);
-    const verb = isSplit
-      ? "Parsing scene & forging items…"
-      : mode === "edit"
-      ? maskUrl
-        ? "Inpainting…"
-        : "Editing…"
-      : "Forging pixels…";
-    setMessages((m) => [...m, { role: "assistant", text: verb }]);
+    setMessages((m) => [
+      ...m,
+      { role: "assistant", text: isScene ? "Parsing scene & forging items…" : "Forging pixels…" },
+    ]);
 
     const referenceUrls: string[] = [];
-    if (mode === "edit" && editRefUrl) referenceUrls.push(editRefUrl);
     if (projectStyle.refUrl) referenceUrls.push(projectStyle.refUrl);
 
     try {
@@ -757,7 +748,7 @@ export default function Home() {
         headers: authHeaders(),
         body: JSON.stringify({
           prompt,
-          assetType,
+          assetType: newAssetType,
           perspective,
           pose: effectivePose,
           quality,
@@ -765,8 +756,7 @@ export default function Home() {
           referenceUrls,
           projectStyle: projectStyle.text || undefined,
           stylePreset: projectStyle.preset,
-          maskUrl: mode === "edit" ? maskUrl : undefined,
-          splitItems: isSplit,
+          splitItems: isScene,
         }),
       });
       const data = await res.json();
@@ -775,13 +765,9 @@ export default function Home() {
       const sourceSize: string = data.size || "1024x1024";
       const cols: number = data.cols || 1;
       const rows: number = data.rows || 1;
-      const editedFromId =
-        mode === "edit"
-          ? Object.values(assets).find((a) => a.rawUrl === editRefUrl)?.id
-          : undefined;
 
       // Split-items returns { items: [{name, url}, ...] }; otherwise { urls: [...] }.
-      const generated: Array<{ name: string; url: string }> = isSplit
+      const generated: Array<{ name: string; url: string }> = isScene
         ? (data.items as Array<{ name: string; url: string }>) || []
         : ((data.urls as string[]) || []).map((url: string) => ({ name: prompt, url }));
 
@@ -793,7 +779,7 @@ export default function Home() {
         updates[id] = {
           id,
           prompt: name,
-          assetType,
+          assetType: newAssetType,
           perspective,
           pose: effectivePose,
           rawUrl: url,
@@ -802,16 +788,13 @@ export default function Home() {
           sourceSize,
           cols,
           rows,
-          editedFrom: editedFromId,
           createdAt: Date.now(),
         };
         newIds.push(id);
       }
       setAssets((a) => ({ ...a, ...updates }));
 
-      // Variety check for multi-frame sheets: gpt-image-1 sometimes returns a
-      // grid where every cell is near-identical. Flag those so the UI can
-      // suggest regeneration instead of silently using a useless sheet.
+      // Variety check for multi-frame sheets.
       if (cols * rows > 1) {
         for (const [id, asset] of Object.entries(updates)) {
           checkSheetVariety(asset.rawUrl, cols, rows)
@@ -826,15 +809,15 @@ export default function Home() {
         }
       }
 
-      // Cost tracking: count chat parse(s) + each image generation.
+      // Cost tracking.
       const sourceSizeForCost = (data.size || "1024x1024") as
         | "1024x1024"
         | "1024x1536"
         | "1536x1024";
       let spend = 0;
       let calls = 0;
-      if (isSplit) {
-        spend += estimateChatCost(); // scene parser
+      if (isScene) {
+        spend += estimateChatCost();
         calls += 1;
         for (let i = 0; i < newIds.length; i++) {
           spend += estimateImageCost(quality, "1024x1024", 1);
@@ -844,33 +827,47 @@ export default function Home() {
         spend += estimateImageCost(quality, sourceSizeForCost, newIds.length);
         calls += 1;
       }
-      const tier = isSplit
-        ? (quality as "low" | "medium" | "high")
-        : (quality as "low" | "medium" | "high");
-      const rec = recordSpend(currentId, spend, calls, tier);
+      const rec = recordSpend(currentId, spend, calls, quality as "low" | "medium" | "high");
       setSessionState(rec.session);
       setProjectLifetime(rec.project);
 
-      // Auto-compose scene from split-items result.
-      if (isSplit && autoCompose && newIds.length > 1) {
+      // Scene mode: auto-compose into a new scene.
+      if (isScene && newIds.length > 1) {
         await composeSceneFromAssets(prompt, newIds, updates);
-        // Layout call adds one more chat call.
         const sceneRec = recordSpend(currentId, estimateChatCost(), 1, "chat");
         setSessionState(sceneRec.session);
         setProjectLifetime(sceneRec.project);
       }
 
+      // Item mode + active scene + "Add to scene" checked: append each new
+      // asset to the active scene at staggered positions.
+      if (!isScene && addToScene && activeScene && newIds.length > 0) {
+        const sceneId = activeScene.id;
+        const cx = activeScene.width / 2;
+        const cy = activeScene.height / 2;
+        newIds.forEach((id, i) => {
+          // Spread variants in a small fan so they don't perfectly overlap.
+          const dx = (i - (newIds.length - 1) / 2) * 60;
+          addAssetToScene(sceneId, id, cx + dx, cy);
+        });
+      }
+
+      // Status message.
       const sceneSuffix =
-        isSplit && autoCompose && newIds.length > 1 ? ` — composed into 🎬 Scenes` : "";
-      const verbDone = isSplit
+        isScene && newIds.length > 1 ? ` — composed into 🎬 Scenes` : "";
+      const addedSuffix =
+        !isScene && addToScene && activeScene && newIds.length > 0
+          ? ` — added to 🎬 ${activeScene.name}`
+          : "";
+      const verbDone = isScene
         ? `Forged ${newIds.length} item${newIds.length > 1 ? "s" : ""}: ${generated
             .map((g) => g.name)
             .join(", ")}${sceneSuffix}`
         : (() => {
-            const v = mode === "edit" ? (maskUrl ? "Inpainted" : "Edited") : "Forged";
             const variantsLabel = newIds.length > 1 ? ` × ${newIds.length}` : "";
             const poseLabel = effectivePose !== "single" ? ` (${effectivePose})` : "";
-            return `${v} ${assetType}${poseLabel}${variantsLabel} — ${quality}, ${gridLabel(gridSize)}.`;
+            const what = isCharacter ? "character" : "item";
+            return `Forged ${what}${poseLabel}${variantsLabel} — ${quality}, ${gridLabel(gridSize)}${addedSuffix}.`;
           })();
       const failures = (data.failures as Array<{ name: string; error: string }> | undefined) || [];
       const failureNote =
@@ -888,10 +885,6 @@ export default function Home() {
         };
         return copy;
       });
-      if (maskUrl) {
-        setMaskUrl(null);
-        setShowMaskPainter(false);
-      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Unknown error";
       setMessages((m) => {
@@ -901,6 +894,87 @@ export default function Home() {
       });
     } finally {
       setBusy(false);
+    }
+  }
+
+  /** Per-card inline edit. The user clicks ✏️ on an asset, types a small
+   *  edit prompt, and we run /api/generate with the asset as a reference
+   *  image. Result is added as a new asset (editedFrom set), so undo is
+   *  trivial — just delete the new one. */
+  async function editAssetInline(asset: Asset, editText: string) {
+    const trimmed = editText.trim();
+    if (!trimmed || editingBusy) return;
+    setEditingBusy(true);
+    setMessages((m) => [...m, { role: "user", text: `✏️ ${trimmed}`, assetType: asset.assetType, perspective: asset.perspective, pose: asset.pose, mode: "edit" }]);
+    setMessages((m) => [...m, { role: "assistant", text: "Editing…" }]);
+    const referenceUrls = [asset.rawUrl];
+    if (projectStyle.refUrl) referenceUrls.push(projectStyle.refUrl);
+    try {
+      const res = await fetch("/api/generate", {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({
+          prompt: trimmed,
+          assetType: asset.assetType,
+          perspective: asset.perspective,
+          pose: "single",
+          quality,
+          variants: 1,
+          referenceUrls,
+          projectStyle: projectStyle.text || undefined,
+          stylePreset: projectStyle.preset,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      const url = ((data.urls as string[]) || [])[0];
+      if (!url) throw new Error("No image returned");
+      const sourceSize: string = data.size || asset.sourceSize;
+      const cols: number = data.cols || 1;
+      const rows: number = data.rows || 1;
+      const pixelUrl = await applyPixelate(url, asset.gridSize, sourceSize);
+      const id = crypto.randomUUID();
+      const newAsset: Asset = {
+        id,
+        prompt: trimmed,
+        name: `${asset.name || asset.prompt} (edit)`,
+        assetType: asset.assetType,
+        perspective: asset.perspective,
+        pose: asset.pose,
+        rawUrl: url,
+        pixelUrl,
+        gridSize: asset.gridSize,
+        sourceSize,
+        cols,
+        rows,
+        editedFrom: asset.id,
+        createdAt: Date.now(),
+      };
+      setAssets((a) => ({ ...a, [id]: newAsset }));
+      const rec = recordSpend(currentId, estimateImageCost(quality, "1024x1024", 1), 1, quality as "low" | "medium" | "high");
+      setSessionState(rec.session);
+      setProjectLifetime(rec.project);
+      setMessages((m) => {
+        const copy = [...m];
+        copy[copy.length - 1] = {
+          role: "assistant",
+          text: `Edited ${asset.name || asset.prompt}.`,
+          assetIds: [id],
+        };
+        return copy;
+      });
+      // Close the inline editor on success.
+      setEditingAssetId(null);
+      setEditPrompt("");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Unknown error";
+      setMessages((m) => {
+        const copy = [...m];
+        copy[copy.length - 1] = { role: "assistant", text: `Edit failed: ${msg}`, error: true };
+        return copy;
+      });
+    } finally {
+      setEditingBusy(false);
     }
   }
 
@@ -2021,32 +2095,17 @@ export default function Home() {
     setAssets(() => ({}));
   }
 
-  function useAsReference(asset: Asset) {
-    setMode("edit");
-    setEditRefUrl(asset.rawUrl);
-    setEditRefName(`${asset.assetType}: ${asset.prompt.slice(0, 30)}`);
-    setMaskUrl(null);
-    setShowMaskPainter(false);
-    setAssetType(asset.assetType);
-    setPerspective(asset.perspective);
-    setPose(asset.pose);
+  /** Open the inline edit panel on a specific asset card. The actual edit
+   *  call goes through editAssetInline once the user submits a prompt. */
+  function startInlineEdit(asset: Asset) {
+    setEditingAssetId(asset.id);
+    setEditPrompt("");
   }
 
   async function useAsProjectStyle(asset: Asset) {
     const small = await downscaleImage(asset.rawUrl, 256);
     setProjectStyle((s) => ({ ...s, refUrl: small }));
     setStyleOpen(true);
-  }
-
-  async function handleUploadEditRef(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const dataUrl = await readFileAsDataUrl(file);
-    setEditRefUrl(dataUrl);
-    setEditRefName(file.name);
-    setMaskUrl(null);
-    setMode("edit");
-    e.target.value = "";
   }
 
   async function handleUploadStyleRef(e: React.ChangeEvent<HTMLInputElement>) {
@@ -2157,11 +2216,9 @@ export default function Home() {
                     type="button"
                     onClick={() => {
                       setInput(s.prompt);
-                      setAssetType(s.type);
+                      setGenMode(s.mode);
                       if (s.pose) setPose(s.pose);
                       if (s.perspective) setPerspective(s.perspective);
-                      if (s.split) setSplitItems(true);
-                      if (s.auto !== undefined) setAutoCompose(s.auto);
                     }}
                     className="px-2 py-1 border border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass text-xs"
                   >
@@ -2175,127 +2232,44 @@ export default function Home() {
 
         {/* Form */}
         <form onSubmit={handleSubmit} className="space-y-2 text-sm">
-          {/* Mode tabs */}
-          <div className="flex items-center gap-1 flex-wrap">
-            <button
-              type="button"
-              onClick={() => setMode("generate")}
-              className={`px-3 py-1 border-2 ${
-                mode === "generate"
-                  ? "border-farm-grass bg-farm-grass/20 text-farm-grass"
-                  : "border-farm-wood text-farm-parchment/70"
-              }`}
-            >
-              Generate
-            </button>
-            <button
-              type="button"
-              onClick={() => setMode("edit")}
-              className={`px-3 py-1 border-2 ${
-                mode === "edit"
-                  ? "border-farm-grass bg-farm-grass/20 text-farm-grass"
-                  : "border-farm-wood text-farm-parchment/70"
-              }`}
-            >
-              ✏️ Edit
-            </button>
-            {mode === "generate" && (
-              <>
-                <button
-                  type="button"
-                  onClick={() => setSplitItems((v) => !v)}
-                  title="Parse the prompt as a scene and generate each item as a separate asset"
-                  className={`ml-2 px-2 py-1 border-2 text-sm ${
-                    splitItems
-                      ? "border-farm-grass bg-farm-grass/20 text-farm-grass"
-                      : "border-farm-wood text-farm-parchment/70 hover:border-farm-parchment"
-                  }`}
-                >
-                  🪄 Split items
-                </button>
-                {splitItems && (
-                  <button
-                    type="button"
-                    onClick={() => setAutoCompose((v) => !v)}
-                    title="After items generate, auto-lay them out into a draggable scene canvas"
-                    className={`px-2 py-1 border-2 text-sm ${
-                      autoCompose
-                        ? "border-farm-grass bg-farm-grass/20 text-farm-grass"
-                        : "border-farm-wood text-farm-parchment/70 hover:border-farm-parchment"
-                    }`}
-                  >
-                    🎬 Auto-compose
-                  </button>
-                )}
-              </>
-            )}
-          </div>
-
-          {/* Edit reference + mask painter */}
-          {mode === "edit" && (
-            <div className="space-y-2">
-              <div className="flex items-center gap-2 p-2 border-2 border-dashed border-farm-grass/50 bg-farm-grass/5">
-                {editRefUrl ? (
-                  <>
-                    <img src={editRefUrl} alt="reference" className="pixelated w-12 h-12 object-contain bg-farm-ink" />
-                    <div className="flex-1 text-xs opacity-80 truncate">
-                      Reference: {editRefName || "uploaded"}
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setShowMaskPainter((v) => !v)}
-                      className={`text-xs px-2 py-0.5 border ${
-                        showMaskPainter
-                          ? "border-farm-grass bg-farm-grass/20 text-farm-grass"
-                          : "border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass"
-                      }`}
-                    >
-                      🖌 Inpaint
-                    </button>
-                    <button
-                      type="button"
-                      onClick={clearEditRef}
-                      className="text-xs px-2 py-0.5 border border-farm-wood/60 hover:border-red-700 hover:text-red-300"
-                    >
-                      ✕
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <span className="opacity-70">No reference. Pick from gallery or:</span>
-                    <label className="px-2 py-0.5 border border-farm-grass/70 text-farm-grass cursor-pointer hover:bg-farm-grass/10">
-                      Upload
-                      <input type="file" accept="image/*" className="hidden" onChange={handleUploadEditRef} />
-                    </label>
-                  </>
-                )}
-              </div>
-              {showMaskPainter && editRefUrl && (
-                <MaskPainter imageUrl={editRefUrl} onMaskChange={setMaskUrl} />
-              )}
-            </div>
-          )}
-
-          {/* Asset type — primary control, always visible */}
+          {/* Asset type — three modes: Character / Item / Scene */}
           <div className="space-y-1">
-            <div className="text-[10px] uppercase tracking-wider opacity-50">Asset type</div>
+            <div className="text-[10px] uppercase tracking-wider opacity-50">Type</div>
             <div className="flex flex-wrap gap-1">
-              {ASSET_TYPES.map((t) => (
+              {GEN_MODES.map((m) => (
                 <button
-                  key={t.value}
+                  key={m.value}
                   type="button"
-                  onClick={() => setAssetType(t.value)}
-                  className={`px-2 py-1 border-2 rounded-sm transition ${
-                    assetType === t.value
+                  onClick={() => setGenMode(m.value)}
+                  title={m.hint}
+                  className={`px-3 py-1 border-2 rounded-sm transition ${
+                    genMode === m.value
                       ? "border-farm-grass bg-farm-grass/20 text-farm-grass"
                       : "border-farm-wood text-farm-parchment/70 hover:border-farm-parchment"
                   }`}
                 >
-                  {t.emoji} {t.label}
+                  {m.emoji} {m.label}
                 </button>
               ))}
             </div>
           </div>
+
+          {/* "Add to scene" — only relevant when there's an active scene
+              and we're generating a single item (not creating a new scene). */}
+          {activeScene && genMode !== "scene" && (
+            <label className="flex items-center gap-2 text-xs cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={addToScene}
+                onChange={(e) => setAddToScene(e.target.checked)}
+                className="accent-farm-grass"
+              />
+              <span>
+                Add to scene{" "}
+                <span className="opacity-60">🎬 {activeScene.name}</span>
+              </span>
+            </label>
+          )}
 
           {/* Advanced options — collapsed by default to reduce noise */}
           <div className="border-t border-farm-wood/30 pt-1.5">
@@ -2308,7 +2282,7 @@ export default function Home() {
               {!advancedOpen && (
                 <span className="opacity-70 normal-case tracking-normal">
                   {PERSPECTIVES.find((p) => p.value === perspective)?.label}
-                  {assetType === "character" && pose !== "single"
+                  {genMode === "character" && pose !== "single"
                     ? ` · ${POSES.find((p) => p.value === pose)?.label}`
                     : ""}
                   {" · "}
@@ -2336,7 +2310,7 @@ export default function Home() {
                   ))}
                 </div>
 
-                {assetType === "character" && (
+                {genMode === "character" && (
                   <div className="flex flex-wrap items-center gap-2 opacity-90">
                     <span className="opacity-60 w-20 inline-block">Pose</span>
                     {POSES.map((p) => (
@@ -2411,7 +2385,7 @@ export default function Home() {
           <div className="border-t-2 border-farm-wood pt-2 space-y-1.5">
             <div className="flex items-center justify-between">
               <label className="text-[10px] uppercase tracking-wider opacity-50">
-                {mode === "edit" ? (maskUrl ? "Inpaint prompt" : "Edit prompt") : splitItems ? "Scene description" : "Prompt"}
+                {genMode === "scene" ? "Scene description" : "Prompt"}
               </label>
               <span className="text-[10px] opacity-40">↑↓ history · ⏎ submit</span>
             </div>
@@ -2441,13 +2415,9 @@ export default function Home() {
                   }
                 }}
                 placeholder={
-                  mode === "edit"
-                    ? maskUrl
-                      ? "Describe what should appear in the painted area"
-                      : "Describe the change — e.g. 'with red overalls', 'now at night'"
-                    : splitItems
+                  genMode === "scene"
                     ? "Describe a scene — e.g. 'a wizard's potion shop with magical items'"
-                    : assetType === "character"
+                    : genMode === "character"
                     ? "e.g. a young farmer in overalls and a straw hat"
                     : "e.g. a sleepy orange tabby cat with a tiny scarf"
                 }
@@ -2456,7 +2426,7 @@ export default function Home() {
                 className="flex-1 bg-farm-ink/60 border-2 border-farm-wood p-2 text-lg text-farm-parchment focus:outline-none focus:border-farm-grass resize-none"
               />
               <button type="submit" disabled={busy || !input.trim()} className="btn-pixel">
-                {busy ? "..." : mode === "edit" ? (maskUrl ? "INPAINT" : "EDIT") : "FORGE"}
+                {busy ? "..." : "FORGE"}
               </button>
             </div>
           </div>
@@ -2569,7 +2539,7 @@ export default function Home() {
                     asset={a}
                     onDownloadPNG={() => downloadPNG(a)}
                     onDownloadFrames={() => downloadFrames(a)}
-                    onUseAsReference={() => useAsReference(a)}
+                    onStartEdit={() => startInlineEdit(a)}
                     onUseAsProjectStyle={() => useAsProjectStyle(a)}
                     onRepixelate={(g) => repixelate(a, g)}
                     onMakeSeamless={() => applySeamless(a)}
@@ -2586,6 +2556,15 @@ export default function Home() {
                       }
                     }}
                     sceneActive={!!activeScene}
+                    editing={editingAssetId === a.id}
+                    editingBusy={editingAssetId === a.id && editingBusy}
+                    editPrompt={editingAssetId === a.id ? editPrompt : ""}
+                    onChangeEditPrompt={setEditPrompt}
+                    onSubmitEdit={() => editAssetInline(a, editPrompt)}
+                    onCancelEdit={() => {
+                      setEditingAssetId(null);
+                      setEditPrompt("");
+                    }}
                   />
                 ))}
               </div>
@@ -3230,9 +3209,18 @@ function ChatBubble({
 }) {
   const isUser = message.role === "user";
   const isError = message.role === "assistant" && message.error;
+  // Map an asset's stored assetType (which may be a legacy value like
+  // "tile" or "creature") to a display chip for chat-message metadata.
   const typeMeta =
     message.role === "user"
-      ? ASSET_TYPES.find((t) => t.value === message.assetType)
+      ? {
+          character: { emoji: "🧑‍🌾", label: "Character" },
+          item: { emoji: "🌽", label: "Item" },
+          tile: { emoji: "🟫", label: "Tile" },
+          building: { emoji: "🏠", label: "Building" },
+          creature: { emoji: "🐔", label: "Creature" },
+          ui: { emoji: "🔔", label: "UI Icon" },
+        }[message.assetType as AssetType]
       : undefined;
   const renderedAssets = (assetIds || [])
     .map((id) => assets[id])
@@ -4889,7 +4877,7 @@ function AssetCard({
   asset,
   onDownloadPNG,
   onDownloadFrames,
-  onUseAsReference,
+  onStartEdit,
   onUseAsProjectStyle,
   onRepixelate,
   onMakeSeamless,
@@ -4901,11 +4889,18 @@ function AssetCard({
   onDragEnd,
   onSetAsSceneBackground,
   sceneActive,
+  editing,
+  editingBusy,
+  editPrompt,
+  onChangeEditPrompt,
+  onSubmitEdit,
+  onCancelEdit,
 }: {
   asset: Asset;
   onDownloadPNG: () => void;
   onDownloadFrames: () => void;
-  onUseAsReference: () => void;
+  /** Open the inline edit panel on this card. */
+  onStartEdit: () => void;
   onUseAsProjectStyle: () => void;
   onRepixelate: (g: number) => void;
   onMakeSeamless: () => void;
@@ -4917,6 +4912,13 @@ function AssetCard({
   onDragEnd: () => void;
   onSetAsSceneBackground: () => void;
   sceneActive: boolean;
+  /** True when this card is the one currently being inline-edited. */
+  editing: boolean;
+  editingBusy: boolean;
+  editPrompt: string;
+  onChangeEditPrompt: (s: string) => void;
+  onSubmitEdit: () => void;
+  onCancelEdit: () => void;
 }) {
   const [w, h] = parseSize(asset.sourceSize);
   const aspect = `${w} / ${h}`;
@@ -5026,6 +5028,53 @@ function AssetCard({
         </div>
       )}
 
+      {editing && (
+        <div className="space-y-1 p-2 border-2 border-farm-grass/70 bg-farm-grass/5">
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] uppercase tracking-wide text-farm-grass">
+              ✏️ Edit this asset
+            </span>
+            <button
+              type="button"
+              onClick={onCancelEdit}
+              disabled={editingBusy}
+              className="text-[11px] opacity-60 hover:opacity-100 px-1"
+              title="Cancel"
+            >
+              ✕
+            </button>
+          </div>
+          <textarea
+            autoFocus
+            value={editPrompt}
+            disabled={editingBusy}
+            onChange={(e) => onChangeEditPrompt(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                if (editPrompt.trim()) onSubmitEdit();
+              } else if (e.key === "Escape") {
+                e.preventDefault();
+                onCancelEdit();
+              }
+            }}
+            placeholder="e.g. with red overalls; add a scarf; now at night"
+            rows={2}
+            className="w-full text-xs bg-farm-ink/60 border border-farm-wood/60 text-farm-parchment px-2 py-1 resize-none focus:outline-none focus:border-farm-grass"
+          />
+          <div className="flex justify-end gap-1">
+            <button
+              type="button"
+              onClick={onSubmitEdit}
+              disabled={editingBusy || !editPrompt.trim()}
+              className="text-[11px] px-2 py-0.5 border border-farm-grass bg-farm-grass/20 text-farm-grass hover:bg-farm-grass/30 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {editingBusy ? "Editing…" : "Apply ⏎"}
+            </button>
+          </div>
+        </div>
+      )}
+
       {editingName ? (
         <input
           autoFocus
@@ -5117,9 +5166,13 @@ function AssetCard({
         </select>
         <div className="flex gap-1">
           <button
-            onClick={onUseAsReference}
-            title="Edit this asset"
-            className="px-1.5 py-0.5 border border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass"
+            onClick={editing ? onCancelEdit : onStartEdit}
+            title={editing ? "Cancel edit" : "Edit this asset"}
+            className={`px-1.5 py-0.5 border ${
+              editing
+                ? "border-farm-grass text-farm-grass bg-farm-grass/10"
+                : "border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass"
+            }`}
           >
             ✏️
           </button>
