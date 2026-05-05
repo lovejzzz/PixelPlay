@@ -317,6 +317,10 @@ export default function Home() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [openaiKey, setOpenaiKey] = useState("");
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  /** In-memory clipboard for scene-item copy/paste. Survives across scenes
+   *  in the same session but not across reloads (intentional — copy/paste
+   *  shouldn't leak items between sessions). */
+  const [sceneClipboard, setSceneClipboard] = useState<SceneItem[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const currentProject = projects[currentId];
@@ -634,6 +638,22 @@ export default function Home() {
         else undoScene(activeScene.id);
         return;
       }
+      // Paste works without a selection — pastes from the clipboard.
+      if (ctrl && (e.key === "v" || e.key === "V")) {
+        if (sceneClipboard.length > 0) {
+          e.preventDefault();
+          pasteSceneItems();
+        }
+        return;
+      }
+      // Copy needs a selection — multi-select aware.
+      if (ctrl && (e.key === "c" || e.key === "C")) {
+        if (selectedSceneItemIds.length > 0) {
+          e.preventDefault();
+          copySceneItems(selectedSceneItemIds);
+        }
+        return;
+      }
 
       if (!sel) return;
       switch (e.key) {
@@ -681,7 +701,7 @@ export default function Home() {
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [rightTab, activeScene, selectedSceneItem, selectedSceneItemIds, sceneSnap]);
+  }, [rightTab, activeScene, selectedSceneItem, selectedSceneItemIds, sceneSnap, sceneClipboard]);
 
   // Refresh cost indicators on hydration / project switch.
   useEffect(() => {
@@ -946,6 +966,9 @@ export default function Home() {
     setActiveSceneId(scene.id);
     setRightTab("scenes");
     setSelectedSceneItemIds([]);
+    // Drop a default ground layer in immediately so the scene isn't a
+    // void. Runs after the setScenes above is committed via the next render.
+    ensureGroundLayer(scene.id);
   }
 
   function addAssetToScene(sceneId: string, assetId: string, x: number, y: number) {
@@ -1379,6 +1402,148 @@ export default function Home() {
         it.id === itemId ? { ...it, animating: !it.animating } : it
       ),
     }));
+  }
+
+  /** Make sure the project has a tile asset usable for ground; create a
+   *  procedural grass tile if there isn't one yet. Returns the tile asset id. */
+  function ensureGroundTileAssetId(): string {
+    const existing = Object.values(assets).find((a) => a.assetType === "tile" && a.name === "grass (default)");
+    if (existing) return existing.id;
+    const id = crypto.randomUUID();
+    const url = makeGrassTileDataUrl();
+    const grass: Asset = {
+      id,
+      prompt: "default grass tile",
+      name: "grass (default)",
+      assetType: "tile",
+      perspective: "top-down",
+      pose: "single",
+      rawUrl: url,
+      pixelUrl: url,
+      gridSize: 0,
+      sourceSize: "32x32",
+      cols: 1,
+      rows: 1,
+      createdAt: Date.now(),
+    };
+    setAssets((a) => ({ ...a, [id]: grass }));
+    return id;
+  }
+
+  /** Add a fully-painted "Ground" tile layer to a scene if it doesn't have
+   *  one yet. Called when scenes are created so they're never empty. */
+  function ensureGroundLayer(sceneId: string) {
+    const tileAssetId = ensureGroundTileAssetId();
+    updateScene(
+      sceneId,
+      (s) => {
+        if (s.tileGrid && s.tileGrid.layers.length > 0) return s;
+        const tileSize = 32;
+        const cols = Math.ceil(s.width / tileSize);
+        const rows = Math.ceil(s.height / tileSize);
+        const cells: Array<{ x: number; y: number }> = [];
+        for (let y = 0; y < rows; y++) {
+          for (let x = 0; x < cols; x++) cells.push({ x, y });
+        }
+        const layer: TileLayer = {
+          id: crypto.randomUUID(),
+          name: "Ground",
+          tileAssetId,
+          cells,
+          visible: true,
+        };
+        return {
+          ...s,
+          tileGrid: { tileSize, layers: [layer] },
+        };
+      },
+      { record: false }
+    );
+  }
+
+  /** Make sure the active scene has a player character. Three cascading
+   *  cases: (1) one is already placed, do nothing; (2) the project has a
+   *  character asset — drop it at scene center; (3) no character asset
+   *  anywhere — generate a procedural placeholder, register it, place it. */
+  function ensurePlayerCharacter(): string | null {
+    if (!activeScene) return null;
+    // (1) already placed
+    const placed = activeScene.items.find(
+      (it) => assets[it.assetId]?.assetType === "character"
+    );
+    if (placed) return placed.id;
+
+    // (2) any character asset in project
+    let charAssetId =
+      Object.values(assets).find((a) => a.assetType === "character")?.id;
+
+    // (3) generate a procedural placeholder
+    if (!charAssetId) {
+      charAssetId = crypto.randomUUID();
+      const url = makeDefaultCharacterDataUrl();
+      const placeholder: Asset = {
+        id: charAssetId,
+        prompt: "default placeholder character",
+        name: "player (default)",
+        assetType: "character",
+        perspective: "top-down",
+        pose: "single",
+        rawUrl: url,
+        pixelUrl: url,
+        gridSize: 0,
+        sourceSize: "64x64",
+        cols: 1,
+        rows: 1,
+        createdAt: Date.now(),
+      };
+      setAssets((a) => ({ ...a, [charAssetId!]: placeholder }));
+    }
+
+    const newItemId = crypto.randomUUID();
+    updateScene(
+      activeScene.id,
+      (s) => {
+        const maxZ = s.items.reduce((m, it) => Math.max(m, it.z), 0);
+        const item: SceneItem = {
+          id: newItemId,
+          assetId: charAssetId!,
+          x: Math.round(s.width / 2),
+          y: Math.round(s.height / 2),
+          scale: 0.1,
+          z: maxZ + 1,
+          animating: false,
+          solid: false,
+        };
+        return { ...s, items: [...s.items, item] };
+      },
+      { record: false }
+    );
+    return newItemId;
+  }
+
+  function copySceneItems(itemIds: string[]) {
+    if (!activeScene || itemIds.length === 0) return;
+    const items = activeScene.items.filter((it) => itemIds.includes(it.id));
+    if (items.length === 0) return;
+    setSceneClipboard(items);
+  }
+
+  function pasteSceneItems() {
+    if (!activeScene || sceneClipboard.length === 0) return;
+    const sceneId = activeScene.id;
+    updateScene(sceneId, (s) => {
+      const baseZ = s.items.reduce((m, it) => Math.max(m, it.z), 0);
+      const pasted: SceneItem[] = sceneClipboard.map((src, i) => ({
+        ...src,
+        id: crypto.randomUUID(),
+        x: Math.min(s.width - 8, Math.max(8, src.x + 32)),
+        y: Math.min(s.height - 8, Math.max(8, src.y + 32)),
+        z: baseZ + 1 + i,
+      }));
+      return { ...s, items: [...s.items, ...pasted] };
+    });
+    // Bounded set; this is fine.
+    setSelectedSceneItemIds([]);
   }
 
   function duplicateSceneItem(sceneId: string, itemId: string) {
@@ -2534,6 +2699,10 @@ export default function Home() {
               );
               setActiveCharacterId(candidate?.id || null);
             }}
+            onEnsurePlayer={ensurePlayerCharacter}
+            onCopySelected={() => copySceneItems(selectedSceneItemIds)}
+            onPaste={pasteSceneItems}
+            clipboardSize={sceneClipboard.length}
             onMoveSceneItem={(id, x, y) =>
               activeScene && moveSceneItem(activeScene.id, id, x, y)
             }
@@ -3174,6 +3343,10 @@ function ScenesView({
   replacePrompt,
   setReplacePrompt,
   onReplaceItem,
+  onEnsurePlayer,
+  onCopySelected,
+  onPaste,
+  clipboardSize,
 }: {
   scenes: Record<string, Scene>;
   assets: Record<string, Asset>;
@@ -3243,6 +3416,12 @@ function ScenesView({
   replacePrompt: string;
   setReplacePrompt: (s: string) => void;
   onReplaceItem: () => void;
+  /** Called when Play is clicked but the scene has no character. Should
+   *  add one and return its id. Returns null if the call failed. */
+  onEnsurePlayer: () => string | null;
+  onCopySelected: () => void;
+  onPaste: () => void;
+  clipboardSize: number;
 }) {
   const sceneList = Object.values(scenes).sort((a, b) => b.createdAt - a.createdAt);
   const canvasAssets: Record<string, CanvasAsset> = {};
@@ -3338,11 +3517,14 @@ function ScenesView({
                   <button
                     type="button"
                     onClick={() => {
-                      if (!autoPicked) {
-                        alert("Add a character to the scene first.");
-                        return;
+                      let playerId = autoPicked;
+                      if (!playerId) {
+                        // No character in scene — let the parent spawn or
+                        // place one (and possibly synthesize a default).
+                        playerId = onEnsurePlayer();
                       }
-                      if (activeCharacterId !== autoPicked) onActiveCharacterChange(autoPicked);
+                      if (!playerId) return; // bail only if ensure failed
+                      if (activeCharacterId !== playerId) onActiveCharacterChange(playerId);
                       onPlayModeChange(true);
                     }}
                     className={`px-2 py-1 border ${
@@ -3402,8 +3584,97 @@ function ScenesView({
             </div>
           )}
           {!playMode && <>
+          {/* Item-level toolbar — replaces the old keyboard-shortcut text
+              with actual buttons that operate on the current selection. */}
+          {(() => {
+            const hasSel = !!selectedSceneItem;
+            const selN = selectedSceneItemIds.length;
+            const selId = selectedSceneItem?.id;
+            const tbBtn = (extra = "") =>
+              `px-1.5 py-0.5 border text-[11px] ${extra} ${
+                hasSel
+                  ? "border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass"
+                  : "border-farm-wood/30 text-farm-parchment/40 cursor-not-allowed"
+              }`;
+            return (
+              <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                <span className="opacity-50 mr-1">Selected{selN > 1 ? ` (${selN})` : ""}:</span>
+                <button
+                  type="button"
+                  disabled={!hasSel}
+                  onClick={() => selId && onBumpSceneItemZ(selId, 1)}
+                  title="Bring forward (⌘])"
+                  className={tbBtn()}
+                >
+                  ⬆ Front
+                </button>
+                <button
+                  type="button"
+                  disabled={!hasSel}
+                  onClick={() => selId && onBumpSceneItemZ(selId, -1)}
+                  title="Send backward (⌘[)"
+                  className={tbBtn()}
+                >
+                  ⬇ Back
+                </button>
+                <button
+                  type="button"
+                  disabled={!hasSel}
+                  onClick={() => selId && onDuplicateSceneItem(selId)}
+                  title="Duplicate (⌘D)"
+                  className={tbBtn()}
+                >
+                  ⎘ Dup
+                </button>
+                <button
+                  type="button"
+                  disabled={selN === 0}
+                  onClick={onCopySelected}
+                  title={`Copy ${selN > 1 ? `${selN} items` : "item"} (⌘C)`}
+                  className={`px-1.5 py-0.5 border text-[11px] ${
+                    selN > 0
+                      ? "border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass"
+                      : "border-farm-wood/30 text-farm-parchment/40 cursor-not-allowed"
+                  }`}
+                >
+                  📋 Copy
+                </button>
+                <button
+                  type="button"
+                  disabled={clipboardSize === 0}
+                  onClick={onPaste}
+                  title={
+                    clipboardSize > 0
+                      ? `Paste ${clipboardSize} item${clipboardSize > 1 ? "s" : ""} (⌘V)`
+                      : "Clipboard is empty"
+                  }
+                  className={`px-1.5 py-0.5 border text-[11px] ${
+                    clipboardSize > 0
+                      ? "border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass"
+                      : "border-farm-wood/30 text-farm-parchment/40 cursor-not-allowed"
+                  }`}
+                >
+                  📌 Paste{clipboardSize > 0 ? ` (${clipboardSize})` : ""}
+                </button>
+                <button
+                  type="button"
+                  disabled={!hasSel}
+                  onClick={() => selId && onDeleteSceneItem(selId)}
+                  title="Delete (Del)"
+                  className={`px-1.5 py-0.5 border text-[11px] ${
+                    hasSel
+                      ? "border-farm-wood/60 hover:border-red-700 hover:text-red-300"
+                      : "border-farm-wood/30 text-farm-parchment/40 cursor-not-allowed"
+                  }`}
+                >
+                  🗑
+                </button>
+                <span className="opacity-40 ml-1">Arrows nudge · Esc deselect</span>
+              </div>
+            );
+          })()}
           <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] opacity-70">
-            <span>💡 Drag from 📦 Assets onto canvas. Arrows nudge · Del removes · ⌘D dup · ⌘] front · ⌘[ back · Esc deselect.</span>
+            <span className="opacity-60">💡 Drag from 📦 Assets onto canvas.</span>
             <div className="flex items-center gap-3">
               <button
                 type="button"
@@ -4914,6 +5185,73 @@ function defaultSolid(t: AssetType): boolean {
   // Buildings, tiles-as-objects (rare), and creatures act as obstacles.
   // Items, UI icons, and characters are passable.
   return t === "building" || t === "creature";
+}
+
+/** Procedural 32×32 grass tile so every fresh scene has visible ground
+ *  even before the user generates a real tile asset. */
+function makeGrassTileDataUrl(): string {
+  const c = document.createElement("canvas");
+  c.width = 32;
+  c.height = 32;
+  const ctx = c.getContext("2d")!;
+  ctx.fillStyle = "#3f6e2e";
+  ctx.fillRect(0, 0, 32, 32);
+  // Deterministic pseudo-random blade specks so the tile actually looks
+  // like grass when it tiles, not like a flat green square.
+  let seed = 1234;
+  const rand = () => {
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+    return seed / 0x7fffffff;
+  };
+  for (let i = 0; i < 80; i++) {
+    const x = Math.floor(rand() * 32);
+    const y = Math.floor(rand() * 32);
+    const r = rand();
+    ctx.fillStyle = r < 0.33 ? "#4f8a3a" : r < 0.66 ? "#2d521e" : "#5ea34b";
+    ctx.fillRect(x, y, 1, r < 0.5 ? 2 : 1);
+  }
+  return c.toDataURL("image/png");
+}
+
+/** Procedural 64×64 character placeholder so Play mode works even before
+ *  the user has generated a real character. */
+function makeDefaultCharacterDataUrl(): string {
+  const c = document.createElement("canvas");
+  c.width = 64;
+  c.height = 64;
+  const ctx = c.getContext("2d")!;
+  ctx.imageSmoothingEnabled = false;
+  // shadow
+  ctx.fillStyle = "rgba(0,0,0,0.25)";
+  ctx.fillRect(20, 56, 24, 4);
+  // legs
+  ctx.fillStyle = "#3a4a8a";
+  ctx.fillRect(24, 44, 6, 12);
+  ctx.fillRect(34, 44, 6, 12);
+  // body / shirt
+  ctx.fillStyle = "#c44a2e";
+  ctx.fillRect(20, 28, 24, 18);
+  // arms
+  ctx.fillStyle = "#f4c89a";
+  ctx.fillRect(16, 30, 4, 12);
+  ctx.fillRect(44, 30, 4, 12);
+  // head
+  ctx.fillStyle = "#f4c89a";
+  ctx.fillRect(22, 12, 20, 16);
+  // hair
+  ctx.fillStyle = "#5a3a1e";
+  ctx.fillRect(22, 8, 20, 6);
+  ctx.fillRect(20, 12, 2, 8);
+  ctx.fillRect(42, 12, 2, 8);
+  // eyes
+  ctx.fillStyle = "#000";
+  ctx.fillRect(27, 19, 2, 2);
+  ctx.fillRect(35, 19, 2, 2);
+  // outline
+  ctx.strokeStyle = "rgba(0,0,0,0.3)";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(20, 12, 24, 16);
+  return c.toDataURL("image/png");
 }
 
 function parseSize(s: string | undefined): [number, number] {
