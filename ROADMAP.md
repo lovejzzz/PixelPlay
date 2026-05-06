@@ -58,7 +58,7 @@ to need editing, but the cron should still grep before changing.
       "Empty trash" actions. Don't break the existing scene-item refs —
       a trashed asset's id still resolves until trash is emptied.
 
-- [ ] **Failed-item retry badge on a composed scene** — when split-items
+- [x] **Failed-item retry badge on a composed scene** — when split-items
       returns `failures[]`, surface them on the resulting scene card as a
       "⚠ N items failed" badge. Clicking it shows the failed names with a
       "Retry" button. Retry is a stub for now (logs to console + shows a

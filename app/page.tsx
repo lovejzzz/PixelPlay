@@ -148,6 +148,9 @@ type Scene = {
   tileGrid?: TileGrid;
   /** 0 = midnight, 0.5 = noon, 1 = midnight again. Tints play view. */
   daytime?: number;
+  /** Items that failed to generate when the scene was composed. Surfaced
+   *  as a "⚠ N failed" badge so users can retry. Cleared once retried. */
+  failedItems?: Array<{ name: string; error: string }>;
   createdAt: number;
 };
 
@@ -848,9 +851,11 @@ export default function Home() {
 
       // Scene mode: auto-compose into a new scene. Pass through the parser's
       // context hint (interior/exterior/aerial) so the layout call knows
-      // whether to hug walls vs. scatter on a landscape.
+      // whether to hug walls vs. scatter on a landscape. Also pass any
+      // per-item failures so they surface as a badge on the scene.
       if (isScene && newIds.length > 1) {
-        await composeSceneFromAssets(prompt, newIds, updates, data.context);
+        const sceneFailures = (data.failures as Array<{ name: string; error: string }> | undefined) || undefined;
+        await composeSceneFromAssets(prompt, newIds, updates, data.context, sceneFailures);
         const sceneRec = recordSpend(currentId, estimateChatCost(), 1, "chat");
         setSessionState(sceneRec.session);
         setProjectLifetime(sceneRec.project);
@@ -1001,7 +1006,8 @@ export default function Home() {
     sceneName: string,
     assetIds: string[],
     fresh: Record<string, Asset>,
-    context?: "interior" | "exterior" | "aerial"
+    context?: "interior" | "exterior" | "aerial",
+    failedItems?: Array<{ name: string; error: string }>
   ) {
     const items = assetIds.map((id) => fresh[id]?.prompt || "item");
     let layout: Array<{ name: string; x: number; y: number; scale: number; z: number }> = [];
@@ -1052,6 +1058,7 @@ export default function Home() {
       width: 1024,
       height: 1024,
       items: sceneItems,
+      failedItems: failedItems && failedItems.length > 0 ? failedItems : undefined,
       createdAt: Date.now(),
     };
 
@@ -2748,6 +2755,11 @@ export default function Home() {
             onCopySelected={() => copySceneItems(selectedSceneItemIds)}
             onPaste={pasteSceneItems}
             clipboardSize={sceneClipboard.length}
+            onClearFailedItems={(sceneId) =>
+              updateScene(sceneId, (s) => ({ ...s, failedItems: undefined }), {
+                record: false,
+              })
+            }
             onMoveSceneItem={(id, x, y) =>
               activeScene && moveSceneItem(activeScene.id, id, x, y)
             }
@@ -3494,6 +3506,7 @@ function ScenesView({
   onCopySelected,
   onPaste,
   clipboardSize,
+  onClearFailedItems,
 }: {
   scenes: Record<string, Scene>;
   assets: Record<string, Asset>;
@@ -3569,7 +3582,9 @@ function ScenesView({
   onCopySelected: () => void;
   onPaste: () => void;
   clipboardSize: number;
+  onClearFailedItems: (sceneId: string) => void;
 }) {
+  const [failedItemsOpen, setFailedItemsOpen] = useState(false);
   const sceneList = Object.values(scenes).sort((a, b) => b.createdAt - a.createdAt);
   const canvasAssets: Record<string, CanvasAsset> = {};
   for (const [id, a] of Object.entries(assets)) {
@@ -3617,6 +3632,16 @@ function ScenesView({
         </select>
         {activeScene && (
           <>
+            {activeScene.failedItems && activeScene.failedItems.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setFailedItemsOpen(true)}
+                title="Some items failed to generate. Click to review."
+                className="px-2 py-1 border border-yellow-500/70 text-yellow-200 bg-yellow-900/20 hover:bg-yellow-900/40 text-xs"
+              >
+                ⚠ {activeScene.failedItems.length} failed
+              </button>
+            )}
             <button
               type="button"
               onClick={() => onExportScene(activeScene.id)}
@@ -4606,6 +4631,69 @@ function ScenesView({
         </>
       ) : (
         <div className="opacity-60 text-center py-12">Pick a scene above.</div>
+      )}
+
+      {failedItemsOpen && activeScene && activeScene.failedItems && activeScene.failedItems.length > 0 && (
+        <div
+          className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4"
+          onClick={() => setFailedItemsOpen(false)}
+        >
+          <div
+            className="bg-farm-ink border-2 border-farm-wood w-full max-w-lg p-5 space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between">
+              <div>
+                <h2 className="font-pixel text-xl text-yellow-200">
+                  ⚠ {activeScene.failedItems.length} item{activeScene.failedItems.length > 1 ? "s" : ""} failed
+                </h2>
+                <p className="text-xs opacity-70 mt-1">
+                  These items were parsed from the scene description but their image generation didn't return. Retry below to try again.
+                </p>
+              </div>
+              <button
+                onClick={() => setFailedItemsOpen(false)}
+                className="text-farm-parchment/70 hover:text-farm-parchment text-xl leading-none px-2"
+                title="Close"
+              >
+                ×
+              </button>
+            </div>
+
+            <ul className="space-y-1.5 text-sm max-h-72 overflow-y-auto pr-2">
+              {activeScene.failedItems.map((f, i) => (
+                <li key={i} className="border border-farm-wood/40 px-2 py-1.5 bg-farm-bg/30">
+                  <div className="font-medium">{f.name}</div>
+                  <div className="text-[10px] opacity-60 truncate" title={f.error}>
+                    {f.error}
+                  </div>
+                </li>
+              ))}
+            </ul>
+
+            <div className="flex items-center justify-between pt-2 border-t border-farm-wood/40">
+              <button
+                onClick={() => {
+                  if (!activeScene) return;
+                  onClearFailedItems(activeScene.id);
+                  setFailedItemsOpen(false);
+                }}
+                className="text-xs opacity-60 hover:opacity-100"
+                title="Hide the badge without retrying"
+              >
+                Dismiss
+              </button>
+              <button
+                onClick={() => {
+                  alert("Retry coming soon — for now, type the failed item names into a new Item generation and use 'Add to scene'.");
+                }}
+                className="text-xs px-3 py-1 border border-farm-grass bg-farm-grass/20 text-farm-grass hover:bg-farm-grass/30"
+              >
+                Retry (soon)
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
