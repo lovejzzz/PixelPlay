@@ -149,7 +149,7 @@ to need editing, but the cron should still grep before changing.
       dialogue, render a small white speech-bubble div above the NPC
       with the text. Hide on exit.
 
-- [ ] **Project import** — add a "📥 Import project" button to the
+- [x] **Project import** — add a "📥 Import project" button to the
       ProjectSwitcher dropdown. Accept a `.zip` exported by the existing
       Export feature. Read `assets.index.json` + each asset PNG +
       `scene.manifest.json` files. Create a new project record with

@@ -2192,6 +2192,227 @@ export default function Home() {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
+  /** Inverse of exportProject. Reads a `.zip` produced by Export and creates
+   *  a new Project record with fresh ids (so re-importing the same zip never
+   *  collides). Maps old asset/scene ids to the new ones in the items'
+   *  assetId, linkSceneId, tileGrid.layers[].tileAssetId, and
+   *  backgroundTileId fields. */
+  async function importProject(file: File) {
+    let zip: JSZip;
+    try {
+      zip = await JSZip.loadAsync(file);
+    } catch (err) {
+      alert(`Couldn't read zip: ${err instanceof Error ? err.message : String(err)}`);
+      return;
+    }
+    const indexFile = zip.file("assets.index.json");
+    if (!indexFile) {
+      alert("This zip doesn't have assets.index.json — is it a Pixel Play export?");
+      return;
+    }
+    type IndexEntry = {
+      id: string;
+      file: string;
+      name?: string;
+      prompt?: string;
+      type?: string;
+      perspective?: string;
+      pose?: string;
+      cols?: number;
+      rows?: number;
+      sourceSize?: string;
+      tags?: string[];
+      createdAt?: number;
+    };
+    const indexJson = await indexFile.async("string");
+    let assetIndex: IndexEntry[];
+    try {
+      assetIndex = JSON.parse(indexJson) as IndexEntry[];
+      if (!Array.isArray(assetIndex)) throw new Error("not an array");
+    } catch {
+      alert("assets.index.json is malformed");
+      return;
+    }
+
+    // Project name — pulled from the first *.project.json if present.
+    const projectFiles = Object.keys(zip.files).filter((p) => p.endsWith(".project.json"));
+    let projectName = "Imported";
+    if (projectFiles.length > 0) {
+      try {
+        const m = JSON.parse(await zip.file(projectFiles[0])!.async("string"));
+        if (typeof m.name === "string" && m.name.trim()) projectName = m.name;
+      } catch { /* keep default */ }
+    }
+
+    // Build assets: load each PNG → data URL, allocate fresh ids, build
+    // both `oldId → newId` and `filename → newId` maps for later wiring.
+    const newAssets: Record<string, Asset> = {};
+    const oldIdToNewId = new Map<string, string>();
+    const filenameToNewId = new Map<string, string>();
+    for (const entry of assetIndex) {
+      const f = zip.file(entry.file);
+      if (!f) continue;
+      const blob = await f.async("blob");
+      const dataUrl: string = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(blob);
+      });
+      const newId = crypto.randomUUID();
+      const validTypes: AssetType[] = ["character", "item", "tile", "building", "creature", "ui"];
+      const assetType: AssetType = validTypes.includes(entry.type as AssetType)
+        ? (entry.type as AssetType)
+        : "item";
+      newAssets[newId] = {
+        id: newId,
+        prompt: entry.prompt || entry.name || "imported",
+        name: entry.name,
+        assetType,
+        perspective: (entry.perspective === "side-view" ? "side-view" : "top-down") as Perspective,
+        pose: (["single", "directions", "walk-cycle", "full-sheet"].includes(entry.pose || "")
+          ? (entry.pose as Pose)
+          : "single"),
+        rawUrl: dataUrl,
+        // No re-pixelate — use the raw both as raw and pixel; export already
+        // captured the pixelated version on the rawUrl path so this matches
+        // what the user originally saw.
+        pixelUrl: dataUrl,
+        gridSize: 0,
+        sourceSize: entry.sourceSize || "1024x1024",
+        cols: entry.cols || 1,
+        rows: entry.rows || 1,
+        tags: entry.tags || [],
+        createdAt: entry.createdAt || Date.now(),
+      };
+      oldIdToNewId.set(entry.id, newId);
+      filenameToNewId.set(entry.file, newId);
+    }
+
+    // Build scenes. Two-pass: first allocate fresh scene ids; second pass
+    // wires items + tileGrid + backgroundTileId + cross-scene linkSceneId.
+    type SceneManifestItem = Record<string, unknown> & {
+      asset_filename?: string | null;
+      linkSceneId?: string | null;
+    };
+    type SceneManifest = {
+      name?: string;
+      width?: number;
+      height?: number;
+      daytime?: number;
+      backgroundTile?: string | null;
+      tileGrid?: TileGrid | null;
+      items?: SceneManifestItem[];
+    };
+    const sceneFiles = Object.keys(zip.files).filter((p) => p.startsWith("scenes/") && p.endsWith(".scene.json"));
+    const oldSceneIdToNewId = new Map<string, string>();
+    const sceneManifests: Array<{ newId: string; manifest: SceneManifest; oldId?: string }> = [];
+    for (const path of sceneFiles) {
+      const f = zip.file(path);
+      if (!f) continue;
+      let manifest: SceneManifest;
+      try {
+        manifest = JSON.parse(await f.async("string"));
+      } catch {
+        continue;
+      }
+      const newId = crypto.randomUUID();
+      // Manifests don't include the original scene id directly; we key by
+      // the file slug so cross-scene linkSceneId references can still match
+      // when both sides exist in the same zip. Older exports may not have
+      // an id; guard.
+      const slugMatch = path.match(/^scenes\/(.+)\.scene\.json$/);
+      const slugKey = slugMatch?.[1] || path;
+      oldSceneIdToNewId.set(slugKey, newId);
+      sceneManifests.push({ newId, manifest, oldId: slugKey });
+    }
+
+    const newScenes: Record<string, Scene> = {};
+    for (const { newId, manifest } of sceneManifests) {
+      const items: SceneItem[] = (manifest.items || []).map((raw) => {
+        const filename = typeof raw.asset_filename === "string" ? raw.asset_filename : null;
+        const assetId = (filename && filenameToNewId.get(filename)) || "";
+        // linkSceneId in the export is the OLD id — try to resolve via slug.
+        // We can't recover the slug from an old id alone; treat as best-effort.
+        const linkRaw = typeof raw.linkSceneId === "string" ? raw.linkSceneId : null;
+        const linkResolved =
+          linkRaw && oldSceneIdToNewId.get(linkRaw)
+            ? oldSceneIdToNewId.get(linkRaw)
+            : undefined;
+        return {
+          id: crypto.randomUUID(),
+          assetId,
+          x: typeof raw.x === "number" ? raw.x : 512,
+          y: typeof raw.y === "number" ? raw.y : 512,
+          scale: typeof raw.scale === "number" ? raw.scale : 0.2,
+          z: typeof raw.z === "number" ? raw.z : 0,
+          animating: !!raw.animating,
+          flipX: !!raw.flipX,
+          flipY: !!raw.flipY,
+          rotation: typeof raw.rotation === "number" ? raw.rotation : undefined,
+          pickable: !!raw.pickable,
+          linkSceneId: linkResolved,
+          patrol: (raw.patrol as SceneItem["patrol"]) || undefined,
+          kind: (raw.kind as SceneItem["kind"]) || undefined,
+          triggerMessage: typeof raw.triggerMessage === "string" ? raw.triggerMessage : undefined,
+          light: (raw.light as SceneItem["light"]) || undefined,
+          emitter: (raw.emitter as SceneItem["emitter"]) || undefined,
+          sound: (raw.sound as SceneItem["sound"]) || undefined,
+          dialogue: typeof raw.dialogue === "string" ? raw.dialogue : undefined,
+          solid: defaultSolid(newAssets[assetId]?.assetType || "item"),
+        };
+      });
+      // Remap the tile grid's tileAssetId from old id to new.
+      let tileGrid: TileGrid | undefined;
+      if (manifest.tileGrid && manifest.tileGrid.layers) {
+        tileGrid = {
+          tileSize: manifest.tileGrid.tileSize,
+          layers: manifest.tileGrid.layers.map((l) => ({
+            ...l,
+            id: crypto.randomUUID(),
+            tileAssetId: oldIdToNewId.get(l.tileAssetId) || l.tileAssetId,
+          })),
+        };
+      }
+      // Background tile — manifest stores a filename.
+      let backgroundTileId: string | undefined;
+      if (typeof manifest.backgroundTile === "string") {
+        backgroundTileId = filenameToNewId.get(manifest.backgroundTile);
+      }
+      newScenes[newId] = {
+        id: newId,
+        name: manifest.name || "Imported scene",
+        width: manifest.width || 1024,
+        height: manifest.height || 1024,
+        items,
+        tileGrid,
+        backgroundTileId,
+        daytime: typeof manifest.daytime === "number" ? manifest.daytime : undefined,
+        createdAt: Date.now(),
+      };
+    }
+
+    const newProj: Project = {
+      id: crypto.randomUUID(),
+      name: `${projectName} (import)`,
+      style: emptyStyle(),
+      assets: newAssets,
+      scenes: newScenes,
+      createdAt: Date.now(),
+    };
+    setProjects((p) => ({ ...p, [newProj.id]: newProj }));
+    setCurrentId(newProj.id);
+    setActiveSceneId(null);
+    setSelectedSceneItemIds([]);
+    alert(
+      `Imported "${newProj.name}" — ${Object.keys(newAssets).length} asset${
+        Object.keys(newAssets).length === 1 ? "" : "s"
+      }, ${Object.keys(newScenes).length} scene${
+        Object.keys(newScenes).length === 1 ? "" : "s"
+      }.`
+    );
+  }
+
   function downloadPNG(asset: Asset) {
     const a = document.createElement("a");
     a.href = asset.pixelUrl;
@@ -2475,6 +2696,7 @@ export default function Home() {
                   onRename={renameCurrentProject}
                   onDelete={deleteCurrentProject}
                   onExport={exportProject}
+                  onImport={importProject}
                 />
                 <button
                   onClick={() => setSettingsOpen(true)}
@@ -3203,6 +3425,7 @@ function ProjectSwitcher({
   onRename,
   onDelete,
   onExport,
+  onImport,
 }: {
   projects: Record<string, Project>;
   currentId: string;
@@ -3211,7 +3434,9 @@ function ProjectSwitcher({
   onRename: (name: string) => void;
   onDelete: () => void;
   onExport: () => void;
+  onImport: (file: File) => void;
 }) {
+  const importInputRef = useRef<HTMLInputElement>(null);
   const list = Object.values(projects).sort((a, b) => a.createdAt - b.createdAt);
   const current = projects[currentId];
 
@@ -3267,6 +3492,26 @@ function ProjectSwitcher({
       >
         ⬇
       </button>
+      <button
+        type="button"
+        onClick={() => importInputRef.current?.click()}
+        title="Import a project zip exported from Pixel Play"
+        className="px-1.5 py-0.5 border border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass"
+      >
+        📥
+      </button>
+      <input
+        ref={importInputRef}
+        type="file"
+        accept=".zip,application/zip"
+        className="hidden"
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          if (f) onImport(f);
+          // Reset so picking the same file twice still fires onChange.
+          e.target.value = "";
+        }}
+      />
       <button
         type="button"
         onClick={handleDelete}
