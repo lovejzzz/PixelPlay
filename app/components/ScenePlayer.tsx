@@ -49,6 +49,10 @@ export function ScenePlayer({
   const [, forceTick] = useState(0);
   const lastTimeRef = useRef<number>(performance.now());
   const animFrameRef = useRef<number | null>(null);
+  /** Lerped camera position (in scene-coords). Trails the player by a
+   *  fraction each tick instead of snapping, so abrupt teleports / portals
+   *  don't whip the camera. Clamped against scene bounds in render. */
+  const cameraRef = useRef<{ x: number; y: number } | null>(null);
 
   const character = activeCharacterId ? scene.items.find((i) => i.id === activeCharacterId) : null;
   const charAsset = character ? assets[character.assetId] : null;
@@ -61,6 +65,8 @@ export function ScenePlayer({
   useEffect(() => {
     if (character) {
       posRef.current = { x: character.x, y: character.y };
+      // Snap the camera to the new player so portals don't whip-pan.
+      cameraRef.current = { x: character.x, y: character.y };
     }
   }, [activeCharacterId]);
 
@@ -461,6 +467,16 @@ export function ScenePlayer({
         }
       }
 
+      // Camera lerp — trail the player by 15% per tick. First tick snaps
+      // to the player so we don't ease in from (0,0).
+      if (!cameraRef.current) {
+        cameraRef.current = { x: posRef.current.x, y: posRef.current.y };
+      } else {
+        const k = 0.15;
+        cameraRef.current.x += (posRef.current.x - cameraRef.current.x) * k;
+        cameraRef.current.y += (posRef.current.y - cameraRef.current.y) * k;
+      }
+
       forceTick((t) => (t + 1) % 1024);
       animFrameRef.current = requestAnimationFrame(step);
     }
@@ -619,8 +635,28 @@ export function ScenePlayer({
   // not the outer frame.
   const viewW = 600;
   const viewH = 600;
-  const camX = -(posRef.current.x * FOLLOW_ZOOM) + viewW / 2;
-  const camY = -(posRef.current.y * FOLLOW_ZOOM) + viewH / 2;
+  // Camera target = lerped player position (or raw position if the lerp
+  // hasn't initialised yet, e.g. before the first rAF tick).
+  const cam = cameraRef.current || posRef.current;
+  // If the world is smaller than the viewport on an axis, center it instead
+  // of following — otherwise the camera would push the world off-screen.
+  let camX: number;
+  let camY: number;
+  if (innerWidthPx <= viewW) {
+    camX = (viewW - innerWidthPx) / 2;
+  } else {
+    // Clamp so the camera never pushes past the world's edge.
+    const target = -(cam.x * FOLLOW_ZOOM) + viewW / 2;
+    const minX = viewW - innerWidthPx;
+    camX = Math.max(minX, Math.min(0, target));
+  }
+  if (innerHeightPx <= viewH) {
+    camY = (viewH - innerHeightPx) / 2;
+  } else {
+    const target = -(cam.y * FOLLOW_ZOOM) + viewH / 2;
+    const minY = viewH - innerHeightPx;
+    camY = Math.max(minY, Math.min(0, target));
+  }
 
   return (
     <div

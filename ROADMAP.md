@@ -84,7 +84,7 @@ to need editing, but the cron should still grep before changing.
       active layer with the current tile asset, with an `if (confirm)`
       first). Both should respect the active tile asset.
 
-- [ ] **Camera follows the player in Play mode** — in `ScenePlayer.tsx`,
+- [x] **Camera follows the player in Play mode** — in `ScenePlayer.tsx`,
       after each rAF tick, find the canvas-wrapper's scrollable parent and
       set `scrollLeft / scrollTop` so the player stays roughly centered
       (clamp to scene bounds, smooth via lerp factor 0.15). Skip if the
