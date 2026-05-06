@@ -192,7 +192,30 @@ type Project = {
    *  pattern: appended to every generation's system message so the model
    *  learns the project's quirks. Modeled after Hermes Agent's MEMORY.md. */
   memory?: string;
+  /** Saved form-state recipes. Hermes-style procedural memory: bundle a
+   *  successful FORGE pattern as a one-click "apply this preset" so the
+   *  user can replay similar generations without re-typing. */
+  recipes?: Record<string, Recipe>;
   createdAt: number;
+};
+
+/** A saved snapshot of the FORGE form values, replay-able with one click.
+ *  Inspired by Hermes Agent's SKILL.md procedural memory. */
+type Recipe = {
+  id: string;
+  name: string;
+  description?: string;
+  mode: GenMode;
+  prompt: string;
+  perspective: Perspective;
+  pose?: Pose;
+  quality: Quality;
+  variants: number;
+  gridSize: number;
+  /** When set, replaces the project-level style.text on apply. */
+  styleOverride?: string;
+  createdAt: number;
+  usageCount: number;
 };
 
 /** Soft cap for the project MEMORY blob, in chars. Inspired by Hermes
@@ -468,6 +491,74 @@ export default function Home() {
     if (!cur) return "";
     if (typeof cur.memory === "string") return cur.memory;
     return cur.style?.text || "";
+  }
+
+  /** Save the current FORGE form state as a named recipe. Stores it on the
+   *  current project. UI surface (save button + recipes tab) lands in
+   *  later Phase-7 items; this is just the data hook. */
+  function saveRecipe(name: string, description?: string) {
+    const trimmedName = name.trim();
+    if (!trimmedName || !currentId) return;
+    const id = crypto.randomUUID();
+    const recipe: Recipe = {
+      id,
+      name: trimmedName,
+      description: description?.trim() || undefined,
+      mode: genMode,
+      prompt: input.trim(),
+      perspective,
+      pose: genMode === "character" ? pose : undefined,
+      quality,
+      variants,
+      gridSize,
+      styleOverride: projectStyle.text?.trim() || undefined,
+      createdAt: Date.now(),
+      usageCount: 0,
+    };
+    setProjects((p) => {
+      const cur = p[currentId];
+      if (!cur) return p;
+      const recipes = { ...(cur.recipes || {}), [id]: recipe };
+      return { ...p, [currentId]: { ...cur, recipes } };
+    });
+  }
+
+  /** Replay a saved recipe by setting every relevant form state. Bumps
+   *  `usageCount` on the recipe so the recipes-tab UI can sort by
+   *  most-used. */
+  function applyRecipe(id: string) {
+    const cur = projects[currentId];
+    const recipe = cur?.recipes?.[id];
+    if (!recipe) return;
+    setGenMode(recipe.mode);
+    setInput(recipe.prompt);
+    setPerspective(recipe.perspective);
+    if (recipe.pose) setPose(recipe.pose);
+    setQuality(recipe.quality);
+    setVariants(recipe.variants);
+    setGridSize(recipe.gridSize);
+    if (typeof recipe.styleOverride === "string") {
+      setProjectStyle((s) => ({ ...s, text: recipe.styleOverride || "" }));
+    }
+    // Bump usage count.
+    setProjects((p) => {
+      const proj = p[currentId];
+      if (!proj || !proj.recipes?.[id]) return p;
+      const next = { ...proj.recipes[id], usageCount: proj.recipes[id].usageCount + 1 };
+      return {
+        ...p,
+        [currentId]: { ...proj, recipes: { ...proj.recipes, [id]: next } },
+      };
+    });
+  }
+
+  function deleteRecipe(id: string) {
+    setProjects((p) => {
+      const cur = p[currentId];
+      if (!cur || !cur.recipes) return p;
+      const { [id]: _drop, ...rest } = cur.recipes;
+      return { ...p, [currentId]: { ...cur, recipes: rest } };
+    });
   }
 
   function setScenes(updater: (s: Record<string, Scene>) => Record<string, Scene>) {

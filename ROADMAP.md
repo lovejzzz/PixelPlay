@@ -212,7 +212,7 @@ Pixel Play's creative-tool context.
 
 ### Recipes — procedural memory
 
-- [ ] **Recipe data model + persistence** — new `Project.recipes?:
+- [x] **Recipe data model + persistence** — new `Project.recipes?:
       Record<string, Recipe>` where `Recipe = { id; name; description?;
       mode: GenMode; prompt: string; perspective; pose?; quality;
       variants; gridSize; styleOverride?; createdAt; usageCount }`. New
