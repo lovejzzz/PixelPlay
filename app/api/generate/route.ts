@@ -316,23 +316,20 @@ export async function POST(req: NextRequest) {
 async function extractScene(key: string, scenePrompt: string): Promise<string[]> {
   const sys =
     "You parse a short scene description into a list of distinct, individually-renderable 2D game-asset items.\n\n" +
-    "STEP 1 — pick exactly one CONTEXT for the whole scene:\n" +
-    " • interior — we're INSIDE a room/building. Items are furniture and props.\n" +
-    " • exterior — we're OUTSIDE in a landscape/streetscape. Items are buildings, trees, rocks, signs, props on the ground.\n" +
+    "RULE: every item must pass the COLLECTIBLE TEST — could a video-game character pick this up, walk around it, or place it in an inventory? A bed YES, a tombstone YES, a single skull YES, a treasure chest YES. The MOON no, FOG no, OCEAN WAVES no, SCATTERED BONES no (use 'a skull' instead), GROUND no (it IS the ground), SHADOW no, A SCHOOL OF FISH no (use 'one fish'), DIRT no, GRASS no (that's the background tile, not an item).\n\n" +
+    "STEP 1 — pick exactly one CONTEXT:\n" +
+    " • interior — INSIDE a room/building. Items are furniture and props.\n" +
+    " • exterior — OUTSIDE in a landscape/streetscape. Items are buildings, trees, rocks, signs, ground props.\n" +
     " • aerial — top-down map view. Items are roof-tops, paths, ponds, small ground-level objects.\n\n" +
-    "If the prompt is ambiguous, prefer the most evocative reading. For example:\n" +
-    " • 'a cabin in the forest' → exterior (one cabin, trees, rocks, path) — NEVER mix in interior furniture.\n" +
-    " • 'a cozy bedroom' → interior (bed, nightstand, lamp, rug) — NEVER include the building's exterior.\n" +
-    " • 'a wizard's potion shop' → interior (cauldron, potion shelves, books, crystal ball).\n" +
-    " • 'a village square' → aerial or exterior (well, market stall, wooden cart, fountain).\n\n" +
-    "STEP 2 — list 3-" + MAX_SPLIT_ITEMS + " concrete physical objects consistent with that ONE context.\n" +
-    " • Each must stand alone as a single sprite (a bed, a barrel, a small mouse, a fir tree).\n" +
-    " • Never mix scales across contexts — no 'cabin (whole building)' alongside 'fireplace (room-sized prop)'.\n" +
-    " • For interior scenes, do NOT include the building exterior, the front door from outside, or roofs.\n" +
-    " • For exterior scenes, do NOT include indoor furniture (chairs, beds, lamps on tables, bookshelves).\n" +
-    " • Avoid abstract concepts (mood, ambience, atmosphere).\n\n" +
-    `Return JSON: { "context": "interior" | "exterior" | "aerial", "items": ["item 1 short descriptor", ...] }. ` +
-    "Each descriptor should be 2-6 words.";
+    "If the prompt is ambiguous, pick the most evocative reading. Worked examples:\n" +
+    " • 'a cabin in the forest' → exterior {a wooden cabin, a pine tree, a fir tree, a rocky boulder, a wooden signpost} — NOT a bed, NOT a fireplace, NOT a chair.\n" +
+    " • 'a cozy bedroom' → interior {a bed with blankets, a nightstand, a reading lamp, a plush rug, a wooden wardrobe} — NOT the cabin's outside, NOT the front door from the street.\n" +
+    " • 'a wizard's potion shop' → interior {a bubbling cauldron, a potion shelf, a spell book, a crystal ball, a magic wand}.\n" +
+    " • 'a haunted graveyard at night' → exterior {a weathered tombstone, a rusty iron gate, a gnarled dead tree, a single skull, a stone statue, a wilted flower} — NOT 'scattered bones' (say 'a skull'), NOT 'full moon' (it's in the sky, not on the ground), NOT 'creeping fog'.\n" +
+    " • 'a pirate ship at sea' → exterior {a wooden pirate ship, a tattered jolly-roger flag, an iron cannon, a treasure chest, a wooden barrel, a rope coil} — NOT 'ocean waves' (waves are the background), NOT 'island silhouette'.\n" +
+    " • 'an underwater coral reef' → exterior {a coral fan, a single fish, a sea turtle, a starfish, a seashell, a clump of seaweed} — NOT 'school of fish'.\n\n" +
+    "STEP 2 — list 3-" + MAX_SPLIT_ITEMS + " items, each 2-6 words, each starting with 'a' or 'an' or a number. Singular nouns only. Each must pass the collectible test. No item should overlap visually with another item in the list.\n\n" +
+    `Return JSON: { "context": "interior" | "exterior" | "aerial", "items": ["a short descriptor", ...] }.`;
 
   const res = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
