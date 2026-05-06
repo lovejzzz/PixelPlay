@@ -1,8 +1,8 @@
 # Pixel Play — Roadmap
 
-This file is read by the autonomous cron. Each fire ticks off the next 1
-unchecked item in **Phase 6** and logs to `CRON-LOG.md`. When everything
-is checked, the cron exits early.
+This file is read by the autonomous cron. Each fire ticks off the **first
+unchecked item in any phase** (skipping `[SKIP-CRON]`) and logs to
+`CRON-LOG.md`. When everything is checked, the cron exits early.
 
 ## Constraints for any cron-driven change
 
@@ -177,7 +177,115 @@ These came out of the audit but are too big/risky for autonomous work:
 - [SKIP-CRON] **Scripted scenes** (visual node graph or small DSL).
 - [SKIP-CRON] **Animation editor** for sprite-sheet cell repair.
 
-## When everything in Phase 6 is checked
+## Phase 7 — AI-native polish (Hermes-inspired)
 
-- Append a "PHASE 6 COMPLETE" entry to `CRON-LOG.md` with the date.
+After studying Nous Research's Hermes Agent, three patterns stood out:
+**SKILL.md procedural memory** (auto-created from successful flows),
+**MEMORY.md / USER.md frozen-into-system-prompt knowledge**, and
+**self-improving prompts**. The items below adapt those patterns to
+Pixel Play's creative-tool context.
+
+### Foundation — Project Memory
+
+- [ ] **Project MEMORY blob — data layer** — add a `Project.memory?:
+      string` field (markdown text, soft-cap ~2200 chars). Persists with
+      the rest of the project state in IndexedDB. Add a `setProjectMemory(
+      currentId: string, memory: string)` mutator. Don't surface in UI yet
+      — just plumb the storage. Migration: undefined = use `projectStyle.
+      text` as the seed value when first read.
+
+- [ ] **Project MEMORY UI — sidebar editor** — extend the existing
+      ProjectStyleSection (the `🎨 Project style — Cozy ▸` collapsible)
+      with a second textarea below the existing style input, labeled
+      "🧠 Project memory" with placeholder "Things learned about this
+      project — naming conventions, palette, recurring characters…
+      Edit me or let Pixel Play update it after good generations." Bind
+      to `setProjectMemory`. ~2200-char counter under the textarea.
+
+- [ ] **Project MEMORY injection into generation prompts** — both
+      `extractScene` and `gptLayout` system prompts in the API routes,
+      and the `slimPromptFor` / `fullPrompt` builders in `app/api/generate
+      /route.ts`, take an optional `projectMemory: string` field via the
+      request body. When present, append it as a `PROJECT MEMORY:\n<text>`
+      block at the end of the system message. Same for `editAssetInline`.
+      Pass `currentProject?.memory` from the client side.
+
+### Recipes — procedural memory
+
+- [ ] **Recipe data model + persistence** — new `Project.recipes?:
+      Record<string, Recipe>` where `Recipe = { id; name; description?;
+      mode: GenMode; prompt: string; perspective; pose?; quality;
+      variants; gridSize; styleOverride?; createdAt; usageCount }`. New
+      mutators `saveRecipe(name, fromCurrentForm)`, `applyRecipe(id)` (sets
+      every form field), `deleteRecipe(id)`. Bump `usageCount` on apply.
+      Persist in same IndexedDB project record.
+
+- [ ] **Recipes tab — third right-tab** — add a "📋 Recipes" tab next
+      to `📦 Assets` and `🎬 Scenes` in the right panel. List rows
+      sorted by `usageCount DESC, createdAt DESC`. Each row shows name,
+      mode emoji, prompt preview (first 60 chars), `usageCount × times`,
+      and an "Apply" button that calls `applyRecipe(id)`. A "💾 Save current
+      form as recipe" button sits in the FORGE form header next to the
+      Type buttons; click → prompts for a recipe name → saves.
+
+- [ ] **Recipe import / export** — extend the existing project export to
+      include `recipes` in the manifest, and the import path to reconstruct
+      them. Stable cross-project format = the Recipe type minus `id` (re-
+      allocated on import). Pure plumbing on top of the existing
+      JSZip exporter / importer.
+
+### User profile — across-projects defaults
+
+- [ ] **User profile in localStorage** — new key `pixelplay:user-profile:v1`
+      with `{ preferredMode?: GenMode; preferredQuality?: Quality;
+      preferredPreset?: StylePreset; preferredPerspective?: Perspective;
+      verbosityHint?: "terse" | "verbose" }`. Read on hydration; auto-update
+      after every successful FORGE (decay-weighted: a single FORGE doesn't
+      override the saved value, but 5+ same-mode submissions in a row do).
+      When a NEW project is created via `createProject`, seed its
+      `projectStyle` and form defaults from the profile.
+
+### Self-improving prompts
+
+- [ ] **Prompt-augmentation memory** — when a generation hits a moderation
+      block or returns an error 2× in a row for similar prompts, append a
+      one-line note to the project's MEMORY blob: e.g. `"Avoid the phrase
+      'X' for asset Y — moderation blocks it."` Implementation: track the
+      last 3 errors keyed by prompt-prefix; on the third matching error,
+      stuff a synthesized note (gpt-4o-mini, ~30 tokens of input, 30 of
+      output) into the project memory. Cron-able as plumbing only — the
+      live error→memory loop will fire when users run the app.
+
+### Auto-curation
+
+- [ ] **"Save as recipe?" toast after similar repeat FORGEs** — track the
+      last 10 successful generations in session-only state. When 3+ have
+      the same `genMode` and ≥60% prompt-token overlap, surface a small
+      toast in the chat panel: `🪄 Save this pattern as a recipe?` with a
+      "Save" button that opens the recipe-name prompt. Dismissible.
+
+### Semantic asset memory
+
+- [ ] **Asset embeddings — generation-time** — when a new asset is created,
+      fire one cheap `gpt-4o-mini` embeddings call with the asset's
+      `name + prompt + tags` text, store the resulting vector on
+      `Asset.embedding?: number[]`. Asset record grows by ~6 KB; well
+      within IndexedDB budget. Plumb the call through `/api/embed` route
+      (new); UI implications come in the next item.
+
+- [ ] **Semantic search in the gallery** — extend the existing search box
+      to do vector cosine matching when the query has no exact substring
+      hits in the standard fields. New helper `app/lib/cosineSearch.ts`.
+      Falls back to substring match silently. UI: small "🧠 semantic"
+      hint chip when the displayed results came from vector search.
+
+### Items deferred from cron in this phase
+
+- [SKIP-CRON] **Concierge agent mode** — multi-turn chat agent that drives
+  the form via tool calls. Substantial — needs a `/api/agent` route, tool
+  schema, conversation state, multi-turn UI redesign.
+
+## When everything in every phase is checked
+
+- Append a "ALL PHASES COMPLETE" entry to `CRON-LOG.md` with the date.
 - Don't add new items autonomously. Stop firing.

@@ -69,6 +69,18 @@ PHASE 6 COMPLETE — 17/17 done. Cron will exit early on subsequent fires.
 
 2026-05-06 fire #30 — PHASE 6 COMPLETE — nothing to do.
 
+## 2026-05-06 — Phase 7 begins (AI-native polish)
+
+User asked for Hermes-Agent-inspired upgrades. Studied
+hermes-agent.nousresearch.com docs; three patterns drove the new
+roadmap: SKILL.md procedural memory, MEMORY.md/USER.md frozen-into-
+prompt knowledge, and self-improving prompts. Added 9 cron-able items
+to ROADMAP under Phase 7 (project MEMORY data + UI + injection,
+recipes data + tab + import/export, user profile, prompt-augmentation
+memory, save-as-recipe toast, asset embeddings, semantic search).
+1 SKIP-CRON deferred (concierge agent mode). Cron will resume at
+5-minute pace and walk these top-down.
+
 2026-05-06 fire #18 — Project import: new `importProject(file: File)` async function in `app/page.tsx` that's the inverse of exportProject. Reads the zip with JSZip, parses `assets.index.json` + every `*.project.json` + every `scenes/*.scene.json`. Allocates fresh ids for assets and scenes; builds two cross-reference maps (`oldId→newId` and `filename→newId`) so item.assetId, tileGrid.layers[].tileAssetId, backgroundTileId, and cross-scene linkSceneId all rewire correctly. Loads each PNG via `FileReader.readAsDataURL` to reconstruct the data-URL Asset format. Fresh project gets `<name> (import)` suffix so re-imports never collide. ProjectSwitcher gained a 📥 button + hidden `<input type="file" accept=".zip">`; clicking the button forwards to the input. Verified end-to-end in the browser by dynamically loading JSZip from CDN, building a synthetic 1-asset 1-scene zip, dispatching it via a DataTransfer to the file input, and reading the resulting IDB project — name, asset, scene, and item all preserved with the correct cross-links. Build clean. Next: Scene mini-map in Play mode.
 
 2026-05-06 fire #17 — NPC dialogue + speech bubble: added `dialogue?: string` to SceneItem (page.tsx) and PlayerSceneItem (ScenePlayer.tsx). New `setSceneItemDialogue` mutator threaded through `onSetDialogue` to ScenesView. Side-panel for character/creature items grew a "💬 Dialogue:" textarea below the patrol section — same pattern as the existing audio URL field. ScenePlayer renders a separate bubble pass after sortedItems.map: filters items with non-empty dialogue + within 32 scene px of the player (lookups respect npcStateRef for moving patrols), positions a small white bordered div above the NPC's head (anchored at `iy - spriteH/2 - 12`, translated `-50% -100%` for bubble bottom alignment), z-index well above the world. Re-rendered every rAF tick via the existing `forceTick` so the bubble appears/disappears smoothly. Build clean. Phase 6 now 17/17 done — cron should exit early next fire.
