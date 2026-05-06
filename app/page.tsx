@@ -175,9 +175,9 @@ type RightTab = "assets" | "scenes";
  *  compat with legacy assets in IDB. */
 type GenMode = "character" | "item" | "scene";
 const GEN_MODES: { value: GenMode; label: string; emoji: string; hint: string }[] = [
-  { value: "character", label: "Character", emoji: "🧑‍🌾", hint: "A single character — pose / walk-cycle options apply" },
-  { value: "item", label: "Item", emoji: "🌽", hint: "One sprite — prop, tile, building, creature, anything" },
-  { value: "scene", label: "Scene", emoji: "🎬", hint: "Multi-asset scene: parsed into 3-8 items, composed onto a scene canvas" },
+  { value: "item", label: "Items", emoji: "🌽", hint: "One sprite — prop, tile, building, creature, anything" },
+  { value: "character", label: "Characters", emoji: "🧑‍🌾", hint: "A single character — pose / walk-cycle options apply" },
+  { value: "scene", label: "Scenes", emoji: "🎬", hint: "Multi-asset scene: parsed into 3-8 items, composed onto a scene canvas" },
 ];
 
 const PERSPECTIVES: { value: Perspective; label: string }[] = [
@@ -253,7 +253,7 @@ export default function Home() {
     {
       role: "assistant",
       text:
-        "Welcome to Pixel Play. Pick Character / Item / Scene, describe what you want, and click FORGE. To tweak an existing asset, click ✏️ on its card and type the change.",
+        "Welcome to Pixel Play. Pick Items / Characters / Scenes, describe what you want, and click FORGE. To tweak an existing asset, click ✏️ on its card and type the change.",
     },
   ]);
   const STARTER_PROMPTS: Array<{
