@@ -1744,6 +1744,43 @@ export default function Home() {
     if (activeSceneId === sceneId) setActiveSceneId(null);
   }
 
+  function duplicateScene(sceneId: string) {
+    const src = scenes[sceneId];
+    if (!src) return;
+    const newId = crypto.randomUUID();
+    // Items get fresh ids but keep assetIds and all other fields. Tile-grid
+    // layers also get fresh ids so multi-layer reordering doesn't collide.
+    const newItems: SceneItem[] = src.items.map((it) => ({
+      ...it,
+      id: crypto.randomUUID(),
+    }));
+    const newTileGrid: TileGrid | undefined = src.tileGrid
+      ? {
+          tileSize: src.tileGrid.tileSize,
+          layers: src.tileGrid.layers.map((l) => ({ ...l, id: crypto.randomUUID() })),
+        }
+      : undefined;
+    const copy: Scene = {
+      ...src,
+      id: newId,
+      name: `${src.name} (copy)`,
+      items: newItems,
+      tileGrid: newTileGrid,
+      // Don't carry forward the failed-items badge from the original.
+      failedItems: undefined,
+      createdAt: Date.now(),
+    };
+    setScenes((s) => ({ ...s, [newId]: copy }));
+    setActiveSceneId(newId);
+    setSelectedSceneItemIds([]);
+  }
+
+  function renameScene(sceneId: string, name: string) {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    updateScene(sceneId, (s) => ({ ...s, name: trimmed }), { record: false });
+  }
+
   async function replaceSceneItem(
     sceneId: string,
     item: SceneItem,
@@ -2817,6 +2854,8 @@ export default function Home() {
                 record: false,
               })
             }
+            onDuplicateScene={duplicateScene}
+            onRenameScene={renameScene}
             onMoveSceneItem={(id, x, y) =>
               activeScene && moveSceneItem(activeScene.id, id, x, y)
             }
@@ -3630,6 +3669,8 @@ function ScenesView({
   onPaste,
   clipboardSize,
   onClearFailedItems,
+  onDuplicateScene,
+  onRenameScene,
 }: {
   scenes: Record<string, Scene>;
   assets: Record<string, Asset>;
@@ -3708,8 +3749,12 @@ function ScenesView({
   onPaste: () => void;
   clipboardSize: number;
   onClearFailedItems: (sceneId: string) => void;
+  onDuplicateScene: (sceneId: string) => void;
+  onRenameScene: (sceneId: string, name: string) => void;
 }) {
   const [failedItemsOpen, setFailedItemsOpen] = useState(false);
+  const [editingSceneName, setEditingSceneName] = useState(false);
+  const [sceneNameDraft, setSceneNameDraft] = useState("");
   const sceneList = Object.values(scenes).sort((a, b) => b.createdAt - a.createdAt);
   const canvasAssets: Record<string, CanvasAsset> = {};
   for (const [id, a] of Object.entries(assets)) {
@@ -3743,20 +3788,65 @@ function ScenesView({
     <div className="space-y-3">
       {/* Scene picker */}
       <div className="flex items-center gap-2 text-sm">
-        <select
-          value={activeSceneId || ""}
-          onChange={(e) => onSelectScene(e.target.value || null)}
-          className="bg-farm-ink border border-farm-wood text-farm-parchment px-2 py-1 flex-1"
-        >
-          <option value="">— pick a scene —</option>
-          {sceneList.map((s) => (
-            <option key={s.id} value={s.id}>
-              🎬 {s.name} ({s.items.length} items)
-            </option>
-          ))}
-        </select>
-        {activeScene && (
+        {editingSceneName && activeScene ? (
+          <input
+            autoFocus
+            type="text"
+            value={sceneNameDraft}
+            onChange={(e) => setSceneNameDraft(e.target.value)}
+            onBlur={() => {
+              if (activeScene && sceneNameDraft.trim()) {
+                onRenameScene(activeScene.id, sceneNameDraft);
+              }
+              setEditingSceneName(false);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                if (activeScene && sceneNameDraft.trim()) {
+                  onRenameScene(activeScene.id, sceneNameDraft);
+                }
+                setEditingSceneName(false);
+              } else if (e.key === "Escape") {
+                setEditingSceneName(false);
+              }
+            }}
+            className="bg-farm-ink border border-farm-grass text-farm-parchment px-2 py-1 flex-1 focus:outline-none"
+          />
+        ) : (
+          <select
+            value={activeSceneId || ""}
+            onChange={(e) => onSelectScene(e.target.value || null)}
+            className="bg-farm-ink border border-farm-wood text-farm-parchment px-2 py-1 flex-1"
+          >
+            <option value="">— pick a scene —</option>
+            {sceneList.map((s) => (
+              <option key={s.id} value={s.id}>
+                🎬 {s.name} ({s.items.length} items)
+              </option>
+            ))}
+          </select>
+        )}
+        {activeScene && !editingSceneName && (
           <>
+            <button
+              type="button"
+              onClick={() => {
+                setSceneNameDraft(activeScene.name);
+                setEditingSceneName(true);
+              }}
+              title="Rename scene"
+              className="px-2 py-1 border border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass text-xs"
+            >
+              ✎
+            </button>
+            <button
+              type="button"
+              onClick={() => onDuplicateScene(activeScene.id)}
+              title={`Duplicate "${activeScene.name}"`}
+              className="px-2 py-1 border border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass text-xs"
+            >
+              ⎘
+            </button>
             {activeScene.failedItems && activeScene.failedItems.length > 0 && (
               <button
                 type="button"

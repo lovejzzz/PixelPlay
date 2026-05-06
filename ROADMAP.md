@@ -90,7 +90,7 @@ to need editing, but the cron should still grep before changing.
       (clamp to scene bounds, smooth via lerp factor 0.15). Skip if the
       scene fits entirely in the viewport.
 
-- [ ] **Duplicate scene + rename scene** — add a "⎘" button next to each
+- [x] **Duplicate scene + rename scene** — add a "⎘" button next to each
       scene in the scene-switcher row that clones the active scene
       (`crypto.randomUUID()` for new id, "(copy)" appended to name, fresh
       ids for items but same assetIds). Add a "✎" button on the active
