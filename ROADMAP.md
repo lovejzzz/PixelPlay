@@ -202,7 +202,7 @@ Pixel Play's creative-tool context.
       Edit me or let Pixel Play update it after good generations." Bind
       to `setProjectMemory`. ~2200-char counter under the textarea.
 
-- [ ] **Project MEMORY injection into generation prompts** — both
+- [x] **Project MEMORY injection into generation prompts** — both
       `extractScene` and `gptLayout` system prompts in the API routes,
       and the `slimPromptFor` / `fullPrompt` builders in `app/api/generate
       /route.ts`, take an optional `projectMemory: string` field via the

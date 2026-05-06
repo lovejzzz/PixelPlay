@@ -12,6 +12,8 @@ type Body = {
   height: number;
   /** Optional context hint from the scene parser. Drives spatial rules. */
   context?: SceneContext;
+  /** Project MEMORY blob — appended to the layout system prompt. */
+  projectMemory?: string;
 };
 
 const MAX_ITEMS = 16;
@@ -44,7 +46,7 @@ export async function POST(req: NextRequest) {
       : "exterior";
 
   try {
-    const layout = await gptLayout(key, description, items, W, H, context);
+    const layout = await gptLayout(key, description, items, W, H, context, body.projectMemory);
     if (!layout || layout.length === 0) {
       return NextResponse.json({ items: heuristicLayout(items, W, H), fallback: true });
     }
@@ -69,8 +71,13 @@ async function gptLayout(
   items: string[],
   W: number,
   H: number,
-  context: SceneContext
+  context: SceneContext,
+  projectMemory?: string
 ): Promise<LayoutItem[]> {
+  const memorySuffix =
+    projectMemory && projectMemory.trim()
+      ? `\n\nPROJECT MEMORY (the user's notes about this project — recurring characters, palette, layout preferences. Treat as soft constraints):\n${projectMemory.trim().slice(0, 1500)}`
+      : "";
   const sys =
     `You are a 2D pixel-art scene layout assistant.\n\n` +
     `Place each item in a ${W}×${H} canvas (origin top-left, +x right, +y down) for a scene described as: "${description}".\n\n` +
@@ -83,7 +90,8 @@ async function gptLayout(
     `- Don't cram every part of the canvas — leave ~30% breathing room. Avoid items inside the bottom 8% of the canvas (looks awkward against the frame).\n` +
     `- Don't overlap two items unless one logically sits on / against / behind the other.\n\n` +
     CONTEXT_RULES[context] +
-    `\n\nReturn JSON: { "items": [{"name": "...", "x": int, "y": int, "scale": float, "z": int}, ...] } using the EXACT item names provided.`;
+    `\n\nReturn JSON: { "items": [{"name": "...", "x": int, "y": int, "scale": float, "z": int}, ...] } using the EXACT item names provided.` +
+    memorySuffix;
 
   const userMsg = `Items: ${JSON.stringify(items)}`;
 

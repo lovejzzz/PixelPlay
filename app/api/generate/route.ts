@@ -51,6 +51,10 @@ type Body = {
   maskUrl?: string;
   /** If true, parse the prompt as a scene and generate each item separately. */
   splitItems?: boolean;
+  /** Project MEMORY blob — frozen-into-system-prompt knowledge about this
+   *  project (naming conventions, palette, recurring characters). Appended
+   *  to every prompt-builder so the model learns the project's quirks. */
+  projectMemory?: string;
 };
 
 const MAX_SPLIT_ITEMS = 8;
@@ -203,6 +207,14 @@ export async function POST(req: NextRequest) {
 
   const styleSuffix = body.projectStyle?.trim() ? `. Project style: ${body.projectStyle.trim()}` : "";
   const presetPrefix = STYLE_PREFIXES[body.stylePreset || "cozy"] || STYLE_PREFIXES.cozy;
+  // Project MEMORY block — Hermes-style frozen-into-prompt knowledge.
+  // Appended at the end (after style suffix) so it's the LAST thing the
+  // image model sees; concrete details there outweigh upstream framing.
+  // Trimmed to a hard cap so a runaway memory blob doesn't blow the
+  // image-prompt budget.
+  const memorySuffix = body.projectMemory?.trim()
+    ? ` PROJECT MEMORY: ${body.projectMemory.trim().slice(0, 1500)}.`
+    : "";
 
   const fullPrompt =
     presetPrefix +
@@ -211,7 +223,8 @@ export async function POST(req: NextRequest) {
     bgHint +
     body.prompt +
     (layout.hint ? ". " + layout.hint : "") +
-    styleSuffix;
+    styleSuffix +
+    memorySuffix;
 
   const provider = (process.env.PROVIDER || "openai").toLowerCase();
 
@@ -226,7 +239,11 @@ export async function POST(req: NextRequest) {
           { status: 400 }
         );
       }
-      const { items, context: sceneContext } = await extractScene(apiKey, body.prompt);
+      const { items, context: sceneContext } = await extractScene(
+        apiKey,
+        body.prompt,
+        body.projectMemory
+      );
       if (items.length === 0) {
         return NextResponse.json(
           { error: "Could not parse the scene into items. Try a different prompt." },
@@ -247,7 +264,8 @@ export async function POST(req: NextRequest) {
         "single " +
         itemName +
         ", centered, isolated game asset" +
-        styleSuffix;
+        styleSuffix +
+        memorySuffix;
 
       // Style-lock: generate the FIRST item synchronously to establish the
       // scene's visual aesthetic, then use it as a reference image for every
@@ -354,7 +372,15 @@ export async function POST(req: NextRequest) {
 type SceneContext = "interior" | "exterior" | "aerial";
 type ExtractedScene = { items: string[]; context: SceneContext };
 
-async function extractScene(key: string, scenePrompt: string): Promise<ExtractedScene> {
+async function extractScene(
+  key: string,
+  scenePrompt: string,
+  projectMemory?: string
+): Promise<ExtractedScene> {
+  const memorySuffix =
+    projectMemory && projectMemory.trim()
+      ? `\n\nPROJECT MEMORY (the user's notes about this project — naming conventions, recurring characters, palette, etc. Treat as soft constraints when picking items):\n${projectMemory.trim().slice(0, 1500)}`
+      : "";
   const sys =
     "You parse a short scene description into a list of distinct, individually-renderable 2D game-asset items.\n\n" +
     "RULE: every item must pass the COLLECTIBLE TEST — could a video-game character pick this up, walk around it, or place it in an inventory? A bed YES, a tombstone YES, a single skull YES, a treasure chest YES. The MOON no, FOG no, OCEAN WAVES no, SCATTERED BONES no (use 'a skull' instead), GROUND no (it IS the ground), SHADOW no, A SCHOOL OF FISH no (use 'one fish'), DIRT no, GRASS no (that's the background tile, not an item), SAND / SANDY BEACH no (the sand is the ground, like grass), WATER / RIVER / LAKE SURFACE no (the water is the ground/backdrop). Use 'a single seashell', 'one cactus', 'a wooden boat' instead.\n\n" +
@@ -371,7 +397,8 @@ async function extractScene(key: string, scenePrompt: string): Promise<Extracted
     " • 'a pirate ship at sea' → exterior {a wooden pirate ship, a tattered jolly-roger flag, an iron cannon, a treasure chest, a wooden barrel, a rope coil} — NOT 'ocean waves' (waves are the background), NOT 'island silhouette'.\n" +
     " • 'an underwater coral reef' → exterior {a coral fan, a single fish, a sea turtle, a starfish, a seashell, a clump of seaweed} — NOT 'school of fish'.\n\n" +
     "STEP 2 — list 3-" + MAX_SPLIT_ITEMS + " items, each 2-6 words, each starting with 'a' or 'an' or a number. Singular nouns only. Each must pass the collectible test. No item should overlap visually with another item in the list.\n\n" +
-    `Return JSON: { "context": "interior" | "exterior" | "aerial", "items": ["a short descriptor", ...] }.`;
+    `Return JSON: { "context": "interior" | "exterior" | "aerial", "items": ["a short descriptor", ...] }.` +
+    memorySuffix;
 
   const res = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",

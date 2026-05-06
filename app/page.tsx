@@ -901,6 +901,7 @@ export default function Home() {
           projectStyle: projectStyle.text || undefined,
           stylePreset: projectStyle.preset,
           splitItems: isScene,
+          projectMemory: getEffectiveProjectMemory() || undefined,
         }),
       });
       const data = await res.json();
@@ -1088,6 +1089,7 @@ export default function Home() {
           referenceUrls,
           projectStyle: projectStyle.text || undefined,
           stylePreset: projectStyle.preset,
+          projectMemory: getEffectiveProjectMemory() || undefined,
         }),
       });
       const data = await res.json();
@@ -1164,6 +1166,7 @@ export default function Home() {
           width: 1024,
           height: 1024,
           context,
+          projectMemory: getEffectiveProjectMemory() || undefined,
         }),
       });
       const data = await res.json();
@@ -2071,6 +2074,7 @@ export default function Home() {
         referenceUrls,
         projectStyle: projectStyle.text || undefined,
         stylePreset: projectStyle.preset,
+        projectMemory: getEffectiveProjectMemory() || undefined,
       }),
     });
     const data = await res.json();
