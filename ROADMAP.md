@@ -273,7 +273,7 @@ Pixel Play's creative-tool context.
       within IndexedDB budget. Plumb the call through `/api/embed` route
       (new); UI implications come in the next item.
 
-- [ ] **Semantic search in the gallery** — extend the existing search box
+- [x] **Semantic search in the gallery** — extend the existing search box
       to do vector cosine matching when the query has no exact substring
       hits in the standard fields. New helper `app/lib/cosineSearch.ts`.
       Falls back to substring match silently. UI: small "🧠 semantic"

@@ -13,6 +13,7 @@ import {
   type ForgeSample,
 } from "./lib/userProfile";
 import { makeSeamless } from "./lib/seamless";
+import { rankBySimilarity } from "./lib/cosineSearch";
 import { SceneCanvas, type CanvasAsset } from "./components/SceneCanvas";
 import { ScenePlayer } from "./components/ScenePlayer";
 import JSZip from "jszip";
@@ -415,6 +416,12 @@ export default function Home() {
   const [busy, setBusy] = useState(false);
   const [hydrated, setHydrated] = useState(false);
   const [search, setSearch] = useState("");
+  /** When the substring search yields zero hits, we embed the query and
+   *  rank by cosine similarity. `null` = inactive (fall back to substring);
+   *  `[]` = ran but found nothing above threshold. */
+  const [semanticIds, setSemanticIds] = useState<string[] | null>(null);
+  const [semanticBusy, setSemanticBusy] = useState(false);
+  const semanticTokenRef = useRef(0);
   const [activeTags, setActiveTags] = useState<string[]>([]);
   const [session, setSessionState] = useState<SessionState>({ startedAt: Date.now(), cost: 0, calls: 0 });
   const [projectLifetime, setProjectLifetime] = useState<{ cost: number; calls: number }>({ cost: 0, calls: 0 });
@@ -814,6 +821,63 @@ export default function Home() {
       /* silent — semantic search just falls back to substring */
     }
   }
+
+  /** Semantic-search fallback: when the substring search comes up empty
+   *  AND we have at least one asset with an embedding, embed the query
+   *  and rank by cosine similarity. Debounced 350ms; tokenised so a
+   *  fast typer never sees stale results. Failure is silent — the UI
+   *  just keeps showing the (empty) substring result. */
+  useEffect(() => {
+    const q = search.trim();
+    if (!q) {
+      setSemanticIds(null);
+      setSemanticBusy(false);
+      return;
+    }
+    const ql = q.toLowerCase();
+    const allLive = Object.values(assets).filter((a) => !a.trashedAt);
+    const hasSubstring = allLive.some((a) => {
+      const hay = `${a.name || ""} ${a.prompt} ${(a.tags || []).join(" ")} ${a.assetType}`.toLowerCase();
+      return hay.includes(ql);
+    });
+    if (hasSubstring) {
+      setSemanticIds(null);
+      setSemanticBusy(false);
+      return;
+    }
+    const candidates = allLive.filter(
+      (a): a is Asset & { embedding: number[] } => Array.isArray(a.embedding) && a.embedding.length > 0
+    );
+    if (candidates.length === 0) {
+      setSemanticIds(null);
+      setSemanticBusy(false);
+      return;
+    }
+    const myToken = ++semanticTokenRef.current;
+    setSemanticBusy(true);
+    const handle = window.setTimeout(async () => {
+      try {
+        const res = await fetch("/api/embed", {
+          method: "POST",
+          headers: authHeaders(),
+          body: JSON.stringify({ texts: [q] }),
+        });
+        if (!res.ok || semanticTokenRef.current !== myToken) return;
+        const data = (await res.json()) as { embeddings?: number[][] };
+        const qvec = data.embeddings?.[0];
+        if (!qvec || semanticTokenRef.current !== myToken) return;
+        const ranked = rankBySimilarity(candidates, qvec, { topK: 24, minScore: 0.25 });
+        if (semanticTokenRef.current !== myToken) return;
+        setSemanticIds(ranked.map((r) => r.id));
+      } catch {
+        /* silent — substring miss + semantic miss = empty state */
+      } finally {
+        if (semanticTokenRef.current === myToken) setSemanticBusy(false);
+      }
+    }, 350);
+    return () => window.clearTimeout(handle);
+  }, [search, assets]);
+
   function pushPromptHistory(p: string) {
     const trimmed = p.trim();
     if (!trimmed) return;
@@ -3139,12 +3203,23 @@ export default function Home() {
     .filter((a) => !!a.trashedAt)
     .sort((a, b) => (b.trashedAt || 0) - (a.trashedAt || 0));
   const allTags = [...new Set(allAssets.flatMap((a) => a.tags || []))].sort();
-  const filteredAssets = allAssets.filter((a) => {
-    if (search) {
-      const q = search.toLowerCase();
-      const hay = `${a.name || ""} ${a.prompt} ${(a.tags || []).join(" ")} ${a.assetType}`.toLowerCase();
-      if (!hay.includes(q)) return false;
-    }
+  const substringHits = allAssets.filter((a) => {
+    if (!search) return true;
+    const q = search.toLowerCase();
+    const hay = `${a.name || ""} ${a.prompt} ${(a.tags || []).join(" ")} ${a.assetType}`.toLowerCase();
+    return hay.includes(q);
+  });
+  // When substring finds nothing, fall back to the semantic-rank list (if
+  // the effect populated it for this query). Tag filter still applies.
+  const usingSemantic = !!(
+    search && substringHits.length === 0 && semanticIds && semanticIds.length > 0
+  );
+  const baseList: Asset[] = usingSemantic
+    ? (semanticIds as string[])
+        .map((id) => assets[id])
+        .filter((a): a is Asset => !!a && !a.trashedAt)
+    : substringHits;
+  const filteredAssets = baseList.filter((a) => {
     if (activeTags.length > 0) {
       const t = a.tags || [];
       if (!activeTags.every((x) => t.includes(x))) return false;
@@ -3154,6 +3229,9 @@ export default function Home() {
   const recent = (() => {
     // Don't mutate filteredAssets in place; sort returns the same ref otherwise.
     const arr = [...filteredAssets];
+    // Semantic-search results are already similarity-ranked; preserving
+    // that order is the whole point of falling back to vector search.
+    if (usingSemantic) return arr;
     switch (assetSort) {
       case "oldest":
         return arr.sort((a, b) => a.createdAt - b.createdAt);
@@ -3655,6 +3733,25 @@ export default function Home() {
                     </button>
                   )}
                 </div>
+                {(usingSemantic || semanticBusy) && (
+                  <div className="text-xs">
+                    {semanticBusy ? (
+                      <span
+                        className="inline-block px-2 py-0.5 border border-farm-wood/60 text-farm-parchment/70"
+                        title="No exact match — searching by meaning…"
+                      >
+                        🧠 thinking…
+                      </span>
+                    ) : (
+                      <span
+                        className="inline-block px-2 py-0.5 border border-farm-grass/60 text-farm-grass"
+                        title="No exact match — showing semantically similar assets"
+                      >
+                        🧠 semantic
+                      </span>
+                    )}
+                  </div>
+                )}
                 {allTags.length > 0 && (
                   <div className="flex flex-wrap items-center gap-1 text-xs">
                     <span className="opacity-60">Tags:</span>
