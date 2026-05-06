@@ -122,6 +122,10 @@ type SceneItem = {
   kind?: "trigger" | "light" | "emitter" | "sound";
   /** Message fired into the play-mode log when the player enters a trigger zone. */
   triggerMessage?: string;
+  /** Message fired when the player presses E near this item in Play mode.
+   *  Differs from triggerMessage in that it requires a button press, not
+   *  proximity alone, so it suits "use" interactions (sit, examine, type). */
+  useMessage?: string;
   /** Point-light parameters (when kind === "light"). */
   light?: { radius: number; color: string; intensity: number };
   /** Particle emitter parameters (when kind === "emitter"). */
@@ -1302,6 +1306,16 @@ export default function Home() {
       ...s,
       items: s.items.map((it) =>
         it.id === itemId ? { ...it, dialogue: trimmed || undefined } : it
+      ),
+    }));
+  }
+
+  function setSceneItemUseMessage(sceneId: string, itemId: string, msg: string) {
+    const trimmed = msg.trim();
+    updateScene(sceneId, (s) => ({
+      ...s,
+      items: s.items.map((it) =>
+        it.id === itemId ? { ...it, useMessage: trimmed || undefined } : it
       ),
     }));
   }
@@ -3365,6 +3379,9 @@ export default function Home() {
             onSetDialogue={(id, d) =>
               activeScene && setSceneItemDialogue(activeScene.id, id, d)
             }
+            onSetUseMessage={(id, m) =>
+              activeScene && setSceneItemUseMessage(activeScene.id, id, m)
+            }
             onAddTriggerZone={() => activeScene && addTriggerZone(activeScene.id)}
             onAddPointLight={() => activeScene && addPointLight(activeScene.id)}
             onSetLight={(id, light) =>
@@ -4295,6 +4312,7 @@ function ScenesView({
   onSetPatrol,
   onSetTriggerMessage,
   onSetDialogue,
+  onSetUseMessage,
   onAddTriggerZone,
   onAddPointLight,
   onSetLight,
@@ -4375,6 +4393,7 @@ function ScenesView({
   onSetPatrol: (id: string, patrol: SceneItem["patrol"]) => void;
   onSetTriggerMessage: (id: string, msg: string) => void;
   onSetDialogue: (id: string, dialogue: string) => void;
+  onSetUseMessage: (id: string, msg: string) => void;
   onAddTriggerZone: () => void;
   onAddPointLight: () => void;
   onSetLight: (id: string, light: SceneItem["light"]) => void;
@@ -5569,6 +5588,27 @@ function ScenesView({
                   />
                 </div>
               )}
+
+              {/* Use message — shown when the player presses E near this item
+                  in Play Mode. Available on ANY real item (including NPCs:
+                  dialogue auto-triggers on proximity, useMessage waits for E). */}
+              <div className="text-xs space-y-1">
+                <label
+                  className="flex items-center gap-2"
+                  title="Shown when the player presses E within ~24 px in Play Mode"
+                >
+                  <span>🅴 Use prompt:</span>
+                </label>
+                <textarea
+                  value={selectedSceneItem.useMessage || ""}
+                  onChange={(e) =>
+                    onSetUseMessage(selectedSceneItem.id, e.target.value)
+                  }
+                  placeholder="e.g. You sit at the desk and check email. (blank = not interactable)"
+                  rows={2}
+                  className="w-full bg-farm-ink/60 border border-farm-wood text-farm-parchment px-2 py-1 resize-none focus:outline-none focus:border-farm-grass"
+                />
+              </div>
 
               {(selectedAsset.cols || 1) * (selectedAsset.rows || 1) > 1 && (
                 <div className="text-xs">

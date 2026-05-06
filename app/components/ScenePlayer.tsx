@@ -17,6 +17,7 @@ export type PlayerSceneItem = CanvasItem & {
   linkSceneId?: string;
   patrol?: { points: Array<{ x: number; y: number }>; loop: boolean; speed: number };
   triggerMessage?: string;
+  useMessage?: string;
   kind?: "trigger" | "light" | "emitter" | "sound";
   light?: { radius: number; color: string; intensity: number };
   emitter?: { kind: "sparkle" | "smoke"; rate: number; lifetime: number };
@@ -33,6 +34,7 @@ const ANIM_FPS = 8;
 const FOLLOW_ZOOM = 2;
 const PICKUP_RADIUS = 16; // scene px
 const DIALOGUE_RADIUS = 32; // scene px — speech-bubble proximity
+const USE_RADIUS = 24; // scene px — "Press E" interaction reach
 const TOAST_LIFETIME = 1500; // ms
 
 export function ScenePlayer({
@@ -573,6 +575,46 @@ export function ScenePlayer({
     };
   }, []);
 
+  // E to use — fires the nearest usable item's useMessage into the play log.
+  // Effect depends on scene.items so it always sees the latest set; the
+  // handler reads posRef live so it picks the item nearest to the current
+  // player position, not the one closest at mount time.
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key !== "e" && e.key !== "E") return;
+      const target = e.target as HTMLElement | null;
+      if (target) {
+        const tag = target.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || target.isContentEditable) return;
+      }
+      // Find the nearest non-kind item with a non-empty useMessage within
+      // USE_RADIUS scene-px of the player. Patrol NPCs use their live
+      // runtime position; static items use their stored x/y.
+      let best: PlayerSceneItem | null = null;
+      let bestDist2 = USE_RADIUS * USE_RADIUS + 1;
+      for (const it of scene.items) {
+        if (it.kind) continue;
+        if (!it.useMessage || !it.useMessage.trim()) continue;
+        const ns = it.patrol ? npcStateRef.current.get(it.id) : undefined;
+        const ix = ns?.x ?? it.x;
+        const iy = ns?.y ?? it.y;
+        const dx = ix - posRef.current.x;
+        const dy = iy - posRef.current.y;
+        const d2 = dx * dx + dy * dy;
+        if (d2 <= USE_RADIUS * USE_RADIUS && d2 < bestDist2) {
+          bestDist2 = d2;
+          best = it;
+        }
+      }
+      if (!best || !best.useMessage) return;
+      e.preventDefault();
+      const id = crypto.randomUUID();
+      setLogEntries((prev) => [...prev.slice(-9), { id, text: best!.useMessage! }]);
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [scene.items]);
+
   // Click → walk-to.
   function onCanvasClick(e: React.MouseEvent) {
     const c = containerRef.current;
@@ -924,6 +966,54 @@ export function ScenePlayer({
               </div>
             );
           })}
+
+        {/* "Press E" hint — shown above the nearest usable item when the
+            player is within USE_RADIUS. Only one hint visible at a time so
+            the screen doesn't pile up bubbles for clustered items. */}
+        {(() => {
+          let bestId: string | null = null;
+          let bestDist2 = USE_RADIUS * USE_RADIUS + 1;
+          for (const it of sortedItems) {
+            if (it.kind) continue;
+            if (!it.useMessage || !it.useMessage.trim()) continue;
+            const ns = it.patrol ? npcStateRef.current.get(it.id) : undefined;
+            const ix = ns?.x ?? it.x;
+            const iy = ns?.y ?? it.y;
+            const dx = ix - posRef.current.x;
+            const dy = iy - posRef.current.y;
+            const d2 = dx * dx + dy * dy;
+            if (d2 <= USE_RADIUS * USE_RADIUS && d2 < bestDist2) {
+              bestDist2 = d2;
+              bestId = it.id;
+            }
+          }
+          if (!bestId) return null;
+          const it = sortedItems.find((x) => x.id === bestId);
+          if (!it) return null;
+          const ns = it.patrol ? npcStateRef.current.get(it.id) : undefined;
+          const ix = ns?.x ?? it.x;
+          const iy = ns?.y ?? it.y;
+          const spriteH = it.scale * longest;
+          const offsetSceneY = spriteH / 2 + 12;
+          const leftPct = (ix / scene.width) * 100;
+          const topPct = ((iy - offsetSceneY) / scene.height) * 100;
+          return (
+            <div
+              key={`${it.id}-use-hint`}
+              className="absolute pointer-events-none"
+              style={{
+                left: `${leftPct}%`,
+                top: `${topPct}%`,
+                transform: "translate(-50%, -100%)",
+                zIndex: it.z + 1001,
+              }}
+            >
+              <div className="bg-farm-grass text-farm-ink text-[10px] px-2 py-0.5 border-2 border-farm-ink font-pixel">
+                Press E
+              </div>
+            </div>
+          );
+        })()}
       </div>
 
       {scene.daytime !== undefined && scene.daytime !== 0.5 && (
