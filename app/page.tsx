@@ -4047,6 +4047,20 @@ function ScenesView({
 }) {
   const [failedItemsOpen, setFailedItemsOpen] = useState(false);
   const [editingSceneName, setEditingSceneName] = useState(false);
+  /** Sound-trigger preview state. Holds the currently-playing item's id so
+   *  the button can render ▶/⏸. Audio element lives in a ref so React
+   *  re-renders don't restart playback. */
+  const [previewingSoundId, setPreviewingSoundId] = useState<string | null>(null);
+  const previewAudioRef = useRef<HTMLAudioElement | null>(null);
+  // Stop preview when the panel closes / a different item is selected.
+  useEffect(() => {
+    return () => {
+      if (previewAudioRef.current) {
+        previewAudioRef.current.pause();
+        previewAudioRef.current = null;
+      }
+    };
+  }, []);
   const [sceneNameDraft, setSceneNameDraft] = useState("");
   const sceneList = Object.values(scenes).sort((a, b) => b.createdAt - a.createdAt);
   const canvasAssets: Record<string, CanvasAsset> = {};
@@ -4618,6 +4632,71 @@ function ScenesView({
                       />
                       Loop
                     </label>
+                    {(() => {
+                      const isPreviewing = previewingSoundId === selectedSceneItem.id;
+                      const stopPreview = () => {
+                        if (previewAudioRef.current) {
+                          previewAudioRef.current.pause();
+                          previewAudioRef.current = null;
+                        }
+                        setPreviewingSoundId(null);
+                      };
+                      const startPreview = () => {
+                        if (!sn.url) return;
+                        // Stop anything already playing first.
+                        if (previewAudioRef.current) {
+                          previewAudioRef.current.pause();
+                          previewAudioRef.current = null;
+                        }
+                        const a = new Audio(sn.url);
+                        a.volume = sn.volume;
+                        // Preview never loops, even if loop is on — preview is a one-shot.
+                        a.loop = false;
+                        a.onended = () => {
+                          if (previewAudioRef.current === a) {
+                            previewAudioRef.current = null;
+                            setPreviewingSoundId(null);
+                          }
+                        };
+                        a.onerror = () => {
+                          if (previewAudioRef.current === a) {
+                            previewAudioRef.current = null;
+                            setPreviewingSoundId(null);
+                          }
+                          alert("Couldn't play this audio URL. Check that it's reachable and a supported format.");
+                        };
+                        previewAudioRef.current = a;
+                        setPreviewingSoundId(selectedSceneItem.id);
+                        void a.play().catch(() => {
+                          // play() can reject on autoplay-policy or bad URL.
+                          if (previewAudioRef.current === a) {
+                            previewAudioRef.current = null;
+                            setPreviewingSoundId(null);
+                          }
+                        });
+                      };
+                      return (
+                        <button
+                          type="button"
+                          onClick={isPreviewing ? stopPreview : startPreview}
+                          disabled={!sn.url}
+                          title={
+                            !sn.url
+                              ? "Set an audio URL first"
+                              : isPreviewing
+                              ? "Stop preview"
+                              : "Play this sound once at the configured volume"
+                          }
+                          className={`px-2 py-0.5 border text-xs ${
+                            isPreviewing
+                              ? "border-farm-grass text-farm-grass bg-farm-grass/10"
+                              : "border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass"
+                          } disabled:opacity-40 disabled:cursor-not-allowed`}
+                        >
+                          {isPreviewing ? "⏸ Stop" : "▶ Preview"}
+                        </button>
+                      );
+                    })()}
                   </>
                 );
               })()}

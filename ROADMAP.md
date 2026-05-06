@@ -137,7 +137,7 @@ to need editing, but the cron should still grep before changing.
       pixel placement, brown overalls, beige skin, brown hair. Keep
       the procedural approach (canvas drawing, deterministic).
 
-- [ ] **Sound trigger preview button** — in the side-panel "🔊 Sound"
+- [x] **Sound trigger preview button** — in the side-panel "🔊 Sound"
       block, add a "▶ Preview" button that plays the sound once at the
       configured volume without entering Play mode. Stop on a second
       click or when the audio ends.
