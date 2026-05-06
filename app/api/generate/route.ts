@@ -191,7 +191,7 @@ export async function POST(req: NextRequest) {
           { status: 400 }
         );
       }
-      const items = await extractScene(apiKey, body.prompt);
+      const { items, context: sceneContext } = await extractScene(apiKey, body.prompt);
       if (items.length === 0) {
         return NextResponse.json(
           { error: "Could not parse the scene into items. Try a different prompt." },
@@ -274,6 +274,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({
         items: fulfilled,
         itemNames: items,
+        context: sceneContext,
         failures: failures.length > 0 ? failures : undefined,
         size: "1024x1024",
         cols: 1,
@@ -313,10 +314,14 @@ export async function POST(req: NextRequest) {
 
 // ------------------------------------------------------------- Scene split
 
-async function extractScene(key: string, scenePrompt: string): Promise<string[]> {
+type SceneContext = "interior" | "exterior" | "aerial";
+type ExtractedScene = { items: string[]; context: SceneContext };
+
+async function extractScene(key: string, scenePrompt: string): Promise<ExtractedScene> {
   const sys =
     "You parse a short scene description into a list of distinct, individually-renderable 2D game-asset items.\n\n" +
-    "RULE: every item must pass the COLLECTIBLE TEST — could a video-game character pick this up, walk around it, or place it in an inventory? A bed YES, a tombstone YES, a single skull YES, a treasure chest YES. The MOON no, FOG no, OCEAN WAVES no, SCATTERED BONES no (use 'a skull' instead), GROUND no (it IS the ground), SHADOW no, A SCHOOL OF FISH no (use 'one fish'), DIRT no, GRASS no (that's the background tile, not an item).\n\n" +
+    "RULE: every item must pass the COLLECTIBLE TEST — could a video-game character pick this up, walk around it, or place it in an inventory? A bed YES, a tombstone YES, a single skull YES, a treasure chest YES. The MOON no, FOG no, OCEAN WAVES no, SCATTERED BONES no (use 'a skull' instead), GROUND no (it IS the ground), SHADOW no, A SCHOOL OF FISH no (use 'one fish'), DIRT no, GRASS no (that's the background tile, not an item), SAND / SANDY BEACH no (the sand is the ground, like grass), WATER / RIVER / LAKE SURFACE no (the water is the ground/backdrop). Use 'a single seashell', 'one cactus', 'a wooden boat' instead.\n\n" +
+    "RULE: NO COLLECTIVE NOUNS. 'A set of chairs' NO → 'a wooden chair'. 'A pair of boots' NO → 'one leather boot'. 'A bunch of carrots' borderline — only OK if drawn as one tied bunch. 'A pile of X' only OK if it visually reads as one mound (a pile of hay = ok, a pile of snowballs = no, just say 'a snowball').\n\n" +
     "STEP 1 — pick exactly one CONTEXT:\n" +
     " • interior — INSIDE a room/building. Items are furniture and props.\n" +
     " • exterior — OUTSIDE in a landscape/streetscape. Items are buildings, trees, rocks, signs, ground props.\n" +
@@ -356,19 +361,60 @@ async function extractScene(key: string, scenePrompt: string): Promise<string[]>
     choices?: Array<{ message?: { content?: string } }>;
   };
   const content = json.choices?.[0]?.message?.content;
-  if (!content) return [];
+  if (!content) return { items: [], context: "exterior" };
   try {
-    const parsed = JSON.parse(content) as { items?: unknown };
-    if (!Array.isArray(parsed.items)) return [];
-    const cleaned = parsed.items
+    const parsed = JSON.parse(content) as { items?: unknown; context?: unknown };
+    if (!Array.isArray(parsed.items)) return { items: [], context: "exterior" };
+    const items = parsed.items
       .filter((x): x is string => typeof x === "string")
-      .map((s) => s.trim())
-      .filter((s) => s.length > 0 && s.length < 100)
+      .map((s) => sanitizeItemDescriptor(s))
+      .filter((s): s is string => !!s)
       .slice(0, MAX_SPLIT_ITEMS);
-    return cleaned;
+    const context: SceneContext =
+      parsed.context === "interior" || parsed.context === "aerial"
+        ? parsed.context
+        : "exterior";
+    return { items, context };
   } catch {
-    return [];
+    return { items: [], context: "exterior" };
   }
+}
+
+/** Code-level guard against the failure modes the LLM keeps slipping on:
+ *  collective nouns, environmental backdrops, atmospheric phenomena.
+ *  Returns null to drop the item entirely; otherwise a cleaned descriptor. */
+function sanitizeItemDescriptor(raw: string): string | null {
+  let s = raw.trim();
+  if (!s) return null;
+  if (s.length > 100) return null;
+  const lower = s.toLowerCase();
+
+  // Drop pure environmental backdrops — these aren't sprites, they're tiles
+  // or sky boxes. Whole-string match (after stripping articles).
+  const stripped = lower.replace(/^(a |an |the )/, "").trim();
+  const BACKDROPS = [
+    "sandy beach", "beach", "sand", "grass", "grassy field", "dirt",
+    "dirt ground", "ground", "floor", "ocean", "sea", "ocean waves",
+    "water", "river", "lake", "pond surface", "sky", "clouds",
+    "fog", "mist", "creeping fog", "shadow", "sunlight", "moonlight",
+    "full moon", "moon", "sun", "stars", "rain", "snowfall",
+    "misty ground", "snow",
+  ];
+  if (BACKDROPS.includes(stripped)) return null;
+
+  // Strip leading collective-noun phrases. We don't try to singularize the
+  // noun (regex pluralization is unreliable — "knives" → "knive"); the
+  // image-generation prompt prefixes "single" anyway, so "single knives"
+  // yields one knife. The point is just to drop the multi-instance framing.
+  const COLLECTIVE_RE = /^(a |an )?(set|pair|bunch|group|school|flock|herd|cluster) of (.+)$/i;
+  const m = s.match(COLLECTIVE_RE);
+  if (m) {
+    // Drop the article entirely — the image prompt's "single" prefix will
+    // supply quantity, and "single a chairs" reads worse than "single chairs".
+    s = m[3];
+  }
+  s = s.replace(/^scattered\s+/i, "single ");
+  return s;
 }
 
 // ------------------------------------------------------------- OpenAI

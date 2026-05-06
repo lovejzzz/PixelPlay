@@ -831,9 +831,11 @@ export default function Home() {
       setSessionState(rec.session);
       setProjectLifetime(rec.project);
 
-      // Scene mode: auto-compose into a new scene.
+      // Scene mode: auto-compose into a new scene. Pass through the parser's
+      // context hint (interior/exterior/aerial) so the layout call knows
+      // whether to hug walls vs. scatter on a landscape.
       if (isScene && newIds.length > 1) {
-        await composeSceneFromAssets(prompt, newIds, updates);
+        await composeSceneFromAssets(prompt, newIds, updates, data.context);
         const sceneRec = recordSpend(currentId, estimateChatCost(), 1, "chat");
         setSessionState(sceneRec.session);
         setProjectLifetime(sceneRec.project);
@@ -983,7 +985,8 @@ export default function Home() {
   async function composeSceneFromAssets(
     sceneName: string,
     assetIds: string[],
-    fresh: Record<string, Asset>
+    fresh: Record<string, Asset>,
+    context?: "interior" | "exterior" | "aerial"
   ) {
     const items = assetIds.map((id) => fresh[id]?.prompt || "item");
     let layout: Array<{ name: string; x: number; y: number; scale: number; z: number }> = [];
@@ -996,6 +999,7 @@ export default function Home() {
           items,
           width: 1024,
           height: 1024,
+          context,
         }),
       });
       const data = await res.json();

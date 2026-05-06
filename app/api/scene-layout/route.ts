@@ -4,11 +4,14 @@ export const runtime = "nodejs";
 export const maxDuration = 30;
 
 type LayoutItem = { name: string; x: number; y: number; scale: number; z: number };
+type SceneContext = "interior" | "exterior" | "aerial";
 type Body = {
   sceneDescription: string;
   items: string[];
   width: number;
   height: number;
+  /** Optional context hint from the scene parser. Drives spatial rules. */
+  context?: SceneContext;
 };
 
 const MAX_ITEMS = 16;
@@ -35,8 +38,13 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ items: heuristicLayout(items, W, H) });
   }
 
+  const context: SceneContext =
+    body.context === "interior" || body.context === "aerial" || body.context === "exterior"
+      ? body.context
+      : "exterior";
+
   try {
-    const layout = await gptLayout(key, description, items, W, H);
+    const layout = await gptLayout(key, description, items, W, H, context);
     if (!layout || layout.length === 0) {
       return NextResponse.json({ items: heuristicLayout(items, W, H), fallback: true });
     }
@@ -46,20 +54,30 @@ export async function POST(req: NextRequest) {
   }
 }
 
+const CONTEXT_RULES: Record<SceneContext, string> = {
+  interior:
+    `CONTEXT: interior room. Push large furniture (bed, sofa, table, dresser, wardrobe, bookshelf, fireplace) against the canvas edges as if hugging walls. Leave the middle 40% of the canvas open as walkable floor. Rugs go in the middle floor area at low z. Small props (lamps, books, mugs) sit ON TOP of furniture at slightly higher z and overlap their host's bounding box on purpose. Buildings, exterior doors, roofs would be wrong here — every item is room-scale.`,
+  exterior:
+    `CONTEXT: exterior landscape. Place ONE central focal item (the largest building if any) near the canvas center or upper third. Scatter smaller items (trees, rocks, signs, barrels, crates) around it with natural irregular spacing — DON'T grid-align them. Leave foreground (bottom 25%) lighter so the scene reads in depth. Trees and tall items can be larger (scale 0.25–0.4) than ground props (0.1–0.2). Avoid pushing items to the canvas edges as if they were furniture against walls — they're outside.`,
+  aerial:
+    `CONTEXT: aerial top-down map. Items are small and read as pieces on a board. Use a more spread, even distribution across the canvas. Paths and ponds may stretch (use moderate scales 0.15–0.3). Roof-top buildings cluster but don't overlap. No item should fill more than ~30% of the canvas.`,
+};
+
 async function gptLayout(
   key: string,
   description: string,
   items: string[],
   W: number,
-  H: number
+  H: number,
+  context: SceneContext
 ): Promise<LayoutItem[]> {
   const sys =
-    `You are a top-down pixel-art scene layout assistant. ` +
+    `You are a 2D pixel-art scene layout assistant. ` +
     `Place each item in a ${W}×${H} canvas (origin top-left, +x right, +y down) for a scene described as: "${description}". ` +
     `Each placement specifies the item's center point (x, y), a scale 0.05–0.5 (fraction of the canvas), and z-order (higher = drawn on top). ` +
-    `Background-y items (rugs, floors) get small z; foreground items (lamps on top of furniture) get larger z. ` +
-    `Place larger furniture against walls, leave open floor in the middle. Avoid overlaps unless logical (e.g. lamp on top of a nightstand should overlap and have higher z). ` +
-    `Return JSON: { "items": [{"name": "...", "x": int, "y": int, "scale": float, "z": int}, ...] } using the EXACT item names provided.`;
+    `Background-y items get small z; foreground items go larger. Items that should sit ON another item should overlap their host's bbox and use a higher z. ` +
+    CONTEXT_RULES[context] +
+    ` Return JSON: { "items": [{"name": "...", "x": int, "y": int, "scale": float, "z": int}, ...] } using the EXACT item names provided.`;
 
   const userMsg = `Items: ${JSON.stringify(items)}`;
 
