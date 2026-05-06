@@ -96,7 +96,7 @@ to need editing, but the cron should still grep before changing.
       ids for items but same assetIds). Add a "✎" button on the active
       scene name in the header that lets you inline-edit the name.
 
-- [ ] **⌘+Enter (Ctrl+Enter on Win) submits FORGE** — the textarea already
+- [x] **⌘+Enter (Ctrl+Enter on Win) submits FORGE** — the textarea already
       submits on Enter. Add ⌘/Ctrl+Enter as a redundant shortcut so users
       with the modifier habit don't get a newline instead of a submit.
       Keep Shift+Enter for newlines (already works).

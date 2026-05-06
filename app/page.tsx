@@ -2545,7 +2545,18 @@ export default function Home() {
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) {
+                  // Submit on:
+                  //   • Enter (no modifiers)
+                  //   • ⌘+Enter (macOS) or Ctrl+Enter (Win/Linux) — redundant
+                  //     shortcut for users with the modifier habit.
+                  // Shift+Enter falls through to the textarea's default
+                  // newline behavior. IME composition (Asian-language
+                  // keyboards) sets isComposing — leave those alone.
+                  if (
+                    e.key === "Enter" &&
+                    !e.nativeEvent.isComposing &&
+                    (!e.shiftKey || e.metaKey || e.ctrlKey)
+                  ) {
                     e.preventDefault();
                     handleSubmit(e as unknown as React.FormEvent);
                     return;
