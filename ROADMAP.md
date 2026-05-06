@@ -50,7 +50,7 @@ to need editing, but the cron should still grep before changing.
       `perspectiveForItem(name, context)` helper. Test by inspecting prompt
       strings only — no actual image generation.
 
-- [ ] **Soft-delete assets with a session trash** — add a `trash:
+- [x] **Soft-delete assets with a session trash** — add a `trash:
       Record<string, Asset>` state in `app/page.tsx` (in-memory only, not
       persisted). `deleteAsset` moves the record into trash instead of
       removing. Surface a small "Trash (N)" link in the gallery footer

@@ -71,6 +71,10 @@ type Asset = {
   createdAt: number;
   /** Set when a multi-frame sheet's cells came back too similar to be useful. */
   lowVariety?: boolean;
+  /** Soft-delete marker. Set by deleteAsset; cleared by restoreAsset.
+   *  Stripped before persisting to IDB so trash is session-only. Scene
+   *  items continue to resolve trashed assets until the trash is emptied. */
+  trashedAt?: number;
 };
 
 type ProjectStyle = {
@@ -316,6 +320,7 @@ export default function Home() {
   const [playMode, setPlayMode] = useState(false);
   const [activeCharacterId, setActiveCharacterId] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [trashOpen, setTrashOpen] = useState(false);
   const [openaiKey, setOpenaiKey] = useState("");
   const [advancedOpen, setAdvancedOpen] = useState(false);
   /** In-memory clipboard for scene-item copy/paste. Survives across scenes
@@ -548,7 +553,17 @@ export default function Home() {
 
   useEffect(() => {
     if (!hydrated) return;
-    idbSet(PROJECTS_IDB_KEY, projects).catch(() => {});
+    // Strip trashed assets before persisting — trash is session-only by
+    // design (asset re-resurrection on reload would surprise users).
+    const stripped: Record<string, Project> = {};
+    for (const [pid, p] of Object.entries(projects)) {
+      const cleanedAssets: Record<string, Asset> = {};
+      for (const [aid, a] of Object.entries(p.assets || {})) {
+        if (!a.trashedAt) cleanedAssets[aid] = a;
+      }
+      stripped[pid] = { ...p, assets: cleanedAssets };
+    }
+    idbSet(PROJECTS_IDB_KEY, stripped).catch(() => {});
   }, [projects, hydrated]);
 
   useEffect(() => {
@@ -2086,17 +2101,51 @@ export default function Home() {
   }
 
   function deleteAsset(id: string) {
+    // Soft-delete: mark trashedAt so the asset hides from the gallery but
+    // still resolves for any scene items still referencing it. Hard-delete
+    // happens on emptyTrash().
     setAssets((a) => {
-      const { [id]: _drop, ...rest } = a;
-      return rest;
+      if (!a[id]) return a;
+      return { ...a, [id]: { ...a[id], trashedAt: Date.now() } };
+    });
+    // Close the inline edit panel if the user just trashed the asset
+    // they were editing.
+    if (editingAssetId === id) {
+      setEditingAssetId(null);
+      setEditPrompt("");
+    }
+  }
+
+  function restoreAsset(id: string) {
+    setAssets((a) => {
+      if (!a[id]) return a;
+      const { trashedAt: _drop, ...rest } = a[id];
+      return { ...a, [id]: rest };
+    });
+  }
+
+  function emptyTrash() {
+    setAssets((a) => {
+      const kept: Record<string, Asset> = {};
+      for (const [id, asset] of Object.entries(a)) {
+        if (!asset.trashedAt) kept[id] = asset;
+      }
+      return kept;
     });
   }
 
   function clearAll() {
-    const count = Object.keys(assets).length;
+    const count = Object.values(assets).filter((a) => !a.trashedAt).length;
     if (count === 0) return;
-    if (!confirm(`Delete all ${count} assets in "${currentProject?.name}"?`)) return;
-    setAssets(() => ({}));
+    if (!confirm(`Move all ${count} assets in "${currentProject?.name}" to trash?`)) return;
+    const now = Date.now();
+    setAssets((a) => {
+      const next: Record<string, Asset> = {};
+      for (const [id, asset] of Object.entries(a)) {
+        next[id] = asset.trashedAt ? asset : { ...asset, trashedAt: now };
+      }
+      return next;
+    });
   }
 
   /** Open the inline edit panel on a specific asset card. The actual edit
@@ -2121,7 +2170,10 @@ export default function Home() {
     e.target.value = "";
   }
 
-  const allAssets = Object.values(assets);
+  const allAssets = Object.values(assets).filter((a) => !a.trashedAt);
+  const trashedAssets = Object.values(assets)
+    .filter((a) => !!a.trashedAt)
+    .sort((a, b) => (b.trashedAt || 0) - (a.trashedAt || 0));
   const allTags = [...new Set(allAssets.flatMap((a) => a.tags || []))].sort();
   const filteredAssets = allAssets.filter((a) => {
     if (search) {
@@ -2573,6 +2625,16 @@ export default function Home() {
                 ))}
               </div>
             )}
+            {trashedAssets.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setTrashOpen(true)}
+                className="mt-3 w-full text-xs px-2 py-1 border border-farm-wood/40 text-farm-parchment/60 hover:border-farm-grass hover:text-farm-grass"
+                title="Recently deleted assets — click to restore or empty"
+              >
+                🗑 Trash ({trashedAssets.length})
+              </button>
+            )}
           </>
         ) : (
           <ScenesView
@@ -2743,6 +2805,20 @@ export default function Home() {
               else localStorage.removeItem(OPENAI_KEY_LS);
             } catch {}
             setSettingsOpen(false);
+          }}
+        />
+      )}
+
+      {trashOpen && (
+        <TrashModal
+          trashed={trashedAssets}
+          onClose={() => setTrashOpen(false)}
+          onRestore={(id) => restoreAsset(id)}
+          onEmpty={() => {
+            if (trashedAssets.length === 0) return;
+            if (!confirm(`Permanently delete ${trashedAssets.length} asset${trashedAssets.length > 1 ? "s" : ""}?`)) return;
+            emptyTrash();
+            setTrashOpen(false);
           }}
         />
       )}
@@ -3077,6 +3153,85 @@ function SettingsModal({
             </button>
           </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function TrashModal({
+  trashed,
+  onClose,
+  onRestore,
+  onEmpty,
+}: {
+  trashed: Asset[];
+  onClose: () => void;
+  onRestore: (id: string) => void;
+  onEmpty: () => void;
+}) {
+  return (
+    <div
+      className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4"
+      onClick={onClose}
+    >
+      <div
+        className="bg-farm-ink border-2 border-farm-wood w-full max-w-2xl max-h-[80vh] overflow-y-auto p-5 space-y-4"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start justify-between">
+          <div>
+            <h2 className="font-pixel text-xl text-farm-grass">🗑 Trash</h2>
+            <p className="text-xs opacity-70 mt-1">
+              Recently deleted assets. Trash is cleared when you reload the page.
+              Scenes still using a trashed asset will continue rendering it until trash is emptied.
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            className="text-farm-parchment/70 hover:text-farm-parchment text-xl leading-none px-2"
+            title="Close"
+          >
+            ×
+          </button>
+        </div>
+
+        {trashed.length === 0 ? (
+          <div className="opacity-60 text-center py-8">Nothing in trash.</div>
+        ) : (
+          <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+            {trashed.map((a) => (
+              <div
+                key={a.id}
+                className="bg-farm-bg/40 border border-farm-wood/60 p-2 flex flex-col gap-1"
+              >
+                <div className="aspect-square bg-checker flex items-center justify-center overflow-hidden">
+                  <img src={a.pixelUrl} alt={a.prompt} className="pixelated max-w-full max-h-full" />
+                </div>
+                <div className="text-[11px] truncate" title={a.name || a.prompt}>
+                  {a.name || a.prompt}
+                </div>
+                <button
+                  onClick={() => onRestore(a.id)}
+                  className="text-[11px] px-1.5 py-0.5 border border-farm-grass/70 text-farm-grass hover:bg-farm-grass/10"
+                >
+                  Restore
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {trashed.length > 0 && (
+          <div className="flex items-center justify-between pt-2 border-t border-farm-wood/40">
+            <span className="text-xs opacity-60">{trashed.length} asset{trashed.length > 1 ? "s" : ""}</span>
+            <button
+              onClick={onEmpty}
+              className="text-xs px-3 py-1 border border-red-700 text-red-300 hover:bg-red-700/20"
+            >
+              Empty trash
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
