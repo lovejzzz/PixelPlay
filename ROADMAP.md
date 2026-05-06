@@ -236,7 +236,7 @@ Pixel Play's creative-tool context.
 
 ### User profile — across-projects defaults
 
-- [ ] **User profile in localStorage** — new key `pixelplay:user-profile:v1`
+- [x] **User profile in localStorage** — new key `pixelplay:user-profile:v1`
       with `{ preferredMode?: GenMode; preferredQuality?: Quality;
       preferredPreset?: StylePreset; preferredPerspective?: Perspective;
       verbosityHint?: "terse" | "verbose" }`. Read on hydration; auto-update

@@ -6,6 +6,12 @@ import { buildSpriteZip, sliceSheet } from "./lib/sprites";
 import { checkSheetVariety } from "./lib/varietyCheck";
 import { trimAlphaToContent } from "./lib/trimAlpha";
 import { idbGet, idbSet } from "./lib/storage";
+import {
+  readUserProfile,
+  patchUserProfile,
+  streakedFields,
+  type ForgeSample,
+} from "./lib/userProfile";
 import { makeSeamless } from "./lib/seamless";
 import { SceneCanvas, type CanvasAsset } from "./components/SceneCanvas";
 import { ScenePlayer } from "./components/ScenePlayer";
@@ -334,15 +340,15 @@ function gridLabel(g: number) {
   return g === 0 ? "Raw" : `${g}px`;
 }
 
-function emptyStyle(): ProjectStyle {
-  return { text: "", refUrl: null, preset: "cozy" };
+function emptyStyle(presetOverride?: StylePreset): ProjectStyle {
+  return { text: "", refUrl: null, preset: presetOverride || "cozy" };
 }
 
-function newProject(name: string): Project {
+function newProject(name: string, presetOverride?: StylePreset): Project {
   return {
     id: crypto.randomUUID(),
     name,
-    style: emptyStyle(),
+    style: emptyStyle(presetOverride),
     assets: {},
     scenes: {},
     createdAt: Date.now(),
@@ -642,7 +648,11 @@ export default function Home() {
   }
 
   function createProject(name: string) {
-    const np = newProject(name);
+    // Seed the new project's style.preset from the user profile so that
+    // a user who consistently picks GameBoy doesn't reset to "cozy" each
+    // time they make a new project. Hermes-style cross-session memory.
+    const profile = readUserProfile();
+    const np = newProject(name, profile.preferredPreset);
     setProjects((p) => ({ ...p, [np.id]: np }));
     setCurrentId(np.id);
   }
@@ -678,8 +688,19 @@ export default function Home() {
       }
       const k = localStorage.getItem(OPENAI_KEY_LS);
       if (k) setOpenaiKey(k);
+      // Cross-session user profile (Hermes USER.md analog) — seed form
+      // defaults so a returning user starts where they left off.
+      const profile = readUserProfile();
+      if (profile.preferredMode) setGenMode(profile.preferredMode);
+      if (profile.preferredQuality) setQuality(profile.preferredQuality);
+      if (profile.preferredPerspective) setPerspective(profile.preferredPerspective);
     } catch {}
   }, []);
+
+  // Sliding window of recent successful FORGE submissions. Promoted to
+  // localStorage profile when STREAK_THRESHOLD identical-field samples
+  // accumulate (handled inside `streakedFields`). Session-only.
+  const forgeWindowRef = useRef<ForgeSample[]>([]);
 
   // Helper: build fetch headers including the user-supplied OpenAI key.
   function authHeaders(): Record<string, string> {
@@ -1142,6 +1163,17 @@ export default function Home() {
         };
         return copy;
       });
+
+      // Cross-session profile streak: a single successful FORGE doesn't
+      // override saved preferences, but 5 in a row of the same value will.
+      forgeWindowRef.current = [
+        ...forgeWindowRef.current.slice(-9),
+        { mode: genMode, quality, perspective },
+      ];
+      const promote = streakedFields(forgeWindowRef.current);
+      if (Object.keys(promote).length > 0) {
+        patchUserProfile(promote);
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Unknown error";
       setMessages((m) => {
