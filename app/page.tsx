@@ -2329,11 +2329,26 @@ export default function Home() {
     const manifest = {
       name: project.name,
       style: project.style,
+      memory: project.memory,
       assetCount: Object.keys(project.assets).length,
       sceneCount: Object.keys(project.scenes).length,
+      recipeCount: project.recipes ? Object.keys(project.recipes).length : 0,
       exportedAt: new Date().toISOString(),
     };
     zip.file(`${projectSlug}.project.json`, JSON.stringify(manifest, null, 2));
+
+    // Recipes — Hermes-style portable skill bundles. Stripped of `id` so
+    // re-importing into the same project doesn't dedupe by id; importer
+    // re-allocates fresh ids.
+    if (project.recipes) {
+      const recipeIndex = Object.values(project.recipes).map((r) => {
+        const { id: _drop, ...rest } = r;
+        return rest;
+      });
+      if (recipeIndex.length > 0) {
+        zip.file(`recipes.json`, JSON.stringify(recipeIndex, null, 2));
+      }
+    }
 
     // Every asset as a PNG, plus a parallel .json with metadata (prompt, tags,
     // pose, type, etc.) so downstream tools can index them.
@@ -2665,24 +2680,72 @@ export default function Home() {
       };
     }
 
+    // Recipes — id-less in the export, re-allocated on import.
+    const newRecipes: Record<string, Recipe> = {};
+    const recipesFile = zip.file("recipes.json");
+    if (recipesFile) {
+      try {
+        const raw = JSON.parse(await recipesFile.async("string"));
+        if (Array.isArray(raw)) {
+          for (const r of raw) {
+            if (!r || typeof r !== "object") continue;
+            const newId = crypto.randomUUID();
+            // Validate the minimum shape; skip records that look broken.
+            const validModes: GenMode[] = ["item", "character", "scene"];
+            if (typeof r.name !== "string" || typeof r.prompt !== "string") continue;
+            if (!validModes.includes(r.mode)) continue;
+            newRecipes[newId] = {
+              id: newId,
+              name: r.name,
+              description: typeof r.description === "string" ? r.description : undefined,
+              mode: r.mode,
+              prompt: r.prompt,
+              perspective: r.perspective === "side-view" ? "side-view" : "top-down",
+              pose: ["single", "directions", "walk-cycle", "full-sheet"].includes(r.pose) ? r.pose : undefined,
+              quality: ["low", "medium", "high"].includes(r.quality) ? r.quality : "medium",
+              variants: typeof r.variants === "number" ? r.variants : 1,
+              gridSize: typeof r.gridSize === "number" ? r.gridSize : 0,
+              styleOverride: typeof r.styleOverride === "string" ? r.styleOverride : undefined,
+              createdAt: typeof r.createdAt === "number" ? r.createdAt : Date.now(),
+              usageCount: typeof r.usageCount === "number" ? r.usageCount : 0,
+            };
+          }
+        }
+      } catch {
+        /* malformed recipes.json — skip silently */
+      }
+    }
+
+    // Restore the project's MEMORY blob too if present in the manifest.
+    let importedMemory: string | undefined;
+    if (projectFiles.length > 0) {
+      try {
+        const m = JSON.parse(await zip.file(projectFiles[0])!.async("string"));
+        if (typeof m.memory === "string" && m.memory.trim()) importedMemory = m.memory;
+      } catch { /* ignore */ }
+    }
+
     const newProj: Project = {
       id: crypto.randomUUID(),
       name: `${projectName} (import)`,
       style: emptyStyle(),
       assets: newAssets,
       scenes: newScenes,
+      memory: importedMemory,
+      recipes: Object.keys(newRecipes).length > 0 ? newRecipes : undefined,
       createdAt: Date.now(),
     };
     setProjects((p) => ({ ...p, [newProj.id]: newProj }));
     setCurrentId(newProj.id);
     setActiveSceneId(null);
     setSelectedSceneItemIds([]);
+    const recipeCount = Object.keys(newRecipes).length;
     alert(
       `Imported "${newProj.name}" — ${Object.keys(newAssets).length} asset${
         Object.keys(newAssets).length === 1 ? "" : "s"
       }, ${Object.keys(newScenes).length} scene${
         Object.keys(newScenes).length === 1 ? "" : "s"
-      }.`
+      }${recipeCount > 0 ? `, ${recipeCount} recipe${recipeCount === 1 ? "" : "s"}` : ""}.`
     );
   }
 

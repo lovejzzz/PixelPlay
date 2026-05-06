@@ -228,7 +228,7 @@ Pixel Play's creative-tool context.
       form as recipe" button sits in the FORGE form header next to the
       Type buttons; click → prompts for a recipe name → saves.
 
-- [ ] **Recipe import / export** — extend the existing project export to
+- [x] **Recipe import / export** — extend the existing project export to
       include `recipes` in the manifest, and the import path to reconstruct
       them. Stable cross-project format = the Recipe type minus `id` (re-
       allocated on import). Pure plumbing on top of the existing
