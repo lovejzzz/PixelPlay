@@ -2550,6 +2550,101 @@ export default function Home() {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
+  function exportTiledJson(sceneId: string) {
+    const s = scenes[sceneId];
+    if (!s) return;
+
+    const tileSize = s.tileGrid?.tileSize ?? 32;
+    const mapW = Math.ceil(s.width / tileSize);
+    const mapH = Math.ceil(s.height / tileSize);
+    const longest = Math.max(s.width, s.height);
+
+    const layers: object[] = [];
+    let nextLayerId = 1;
+    let nextObjectId = 1;
+
+    // One tilelayer per tile-grid layer.
+    if (s.tileGrid) {
+      for (const layer of s.tileGrid.layers) {
+        const data = new Array<number>(mapW * mapH).fill(0);
+        for (const cell of layer.cells) {
+          if (cell.x >= 0 && cell.x < mapW && cell.y >= 0 && cell.y < mapH) {
+            data[cell.y * mapW + cell.x] = 1;
+          }
+        }
+        layers.push({
+          type: "tilelayer",
+          id: nextLayerId++,
+          name: layer.name,
+          width: mapW,
+          height: mapH,
+          x: 0,
+          y: 0,
+          visible: layer.visible,
+          opacity: 1,
+          data,
+        });
+      }
+    }
+
+    // One objectgroup for non-tile scene items.
+    const objects: object[] = [];
+    for (const it of s.items) {
+      const a = assets[it.assetId];
+      const itemSize = Math.round(it.scale * longest);
+      const objX = Math.round(it.x - itemSize / 2);
+      const objY = it.anchor === "bottom"
+        ? Math.round(it.y - itemSize)
+        : Math.round(it.y - itemSize / 2);
+      objects.push({
+        id: nextObjectId++,
+        x: objX,
+        y: objY,
+        width: itemSize,
+        height: itemSize,
+        name: a?.name || (a?.prompt ?? "").slice(0, 40) || it.id.slice(0, 8),
+        type: a?.assetType || it.kind || "unknown",
+        rotation: it.rotation ?? 0,
+        visible: true,
+      });
+    }
+    if (objects.length > 0) {
+      layers.push({
+        type: "objectgroup",
+        id: nextLayerId++,
+        name: "Items",
+        x: 0,
+        y: 0,
+        visible: true,
+        opacity: 1,
+        objects,
+      });
+    }
+
+    const map = {
+      tiledversion: "1.10.0",
+      type: "map",
+      orientation: "orthogonal",
+      renderorder: "right-down",
+      infinite: false,
+      width: mapW,
+      height: mapH,
+      tilewidth: tileSize,
+      tileheight: tileSize,
+      nextlayerid: nextLayerId,
+      nextobjectid: nextObjectId,
+      layers,
+    };
+
+    const blob = new Blob([JSON.stringify(map, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${slugify(s.name)}.tmj`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
   async function exportProject() {
     const project = projects[currentId];
     if (!project) return;
@@ -3897,6 +3992,7 @@ export default function Home() {
             }}
             onDeleteScene={deleteScene}
             onExportScene={exportScene}
+            onExportTiledJson={exportTiledJson}
             activeScene={activeScene}
             selectedSceneItem={selectedSceneItem}
             selectedSceneItemIds={selectedSceneItemIds}
@@ -5035,6 +5131,7 @@ function ScenesView({
   onSelectScene,
   onDeleteScene,
   onExportScene,
+  onExportTiledJson,
   activeScene,
   selectedSceneItem,
   selectedSceneItemIds,
@@ -5117,6 +5214,7 @@ function ScenesView({
   onSelectScene: (id: string | null) => void;
   onDeleteScene: (id: string) => void;
   onExportScene: (id: string) => void;
+  onExportTiledJson: (id: string) => void;
   activeScene: Scene | null;
   selectedSceneItem: SceneItem | null;
   selectedSceneItemIds: string[];
@@ -5321,6 +5419,14 @@ function ScenesView({
               className="px-2 py-1 border border-farm-grass text-farm-grass hover:bg-farm-grass/10 text-xs"
             >
               ⬇ Export
+            </button>
+            <button
+              type="button"
+              onClick={() => onExportTiledJson(activeScene.id)}
+              title="Export scene as Tiled 1.10 JSON (.tmj)"
+              className="px-2 py-1 border border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass text-xs"
+            >
+              ⬇ Tiled JSON
             </button>
             <button
               type="button"

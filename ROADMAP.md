@@ -308,7 +308,7 @@ Make the project presentable and export-friendly for real game developers.
 
 ### Game-engine export
 
-- [ ] **Tiled JSON export** — add an "Export Tiled JSON" button in ScenesView
+- [x] **Tiled JSON export** — add an "Export Tiled JSON" button in ScenesView
       (next to the existing Export PNG/ZIP). Serialises the active scene's tile
       grid layers into a Tiled 1.10-compatible `.tmj` file (JSON map format):
       `tiledversion`, `width`/`height` in tiles, `tilewidth`/`tileheight`,
