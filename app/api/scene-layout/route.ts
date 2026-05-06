@@ -72,12 +72,18 @@ async function gptLayout(
   context: SceneContext
 ): Promise<LayoutItem[]> {
   const sys =
-    `You are a 2D pixel-art scene layout assistant. ` +
-    `Place each item in a ${W}×${H} canvas (origin top-left, +x right, +y down) for a scene described as: "${description}". ` +
-    `Each placement specifies the item's center point (x, y), a scale 0.05–0.5 (fraction of the canvas), and z-order (higher = drawn on top). ` +
-    `Background-y items get small z; foreground items go larger. Items that should sit ON another item should overlap their host's bbox and use a higher z. ` +
+    `You are a 2D pixel-art scene layout assistant.\n\n` +
+    `Place each item in a ${W}×${H} canvas (origin top-left, +x right, +y down) for a scene described as: "${description}".\n\n` +
+    `IMPORTANT: items are rendered with BOTTOM-CENTER anchoring. The (x, y) you return is the GROUND POINT — where the item touches the floor — not its centre. So a tall tree at y=600 means the tree's BASE is at y=600 (and its leaves are above). Items "on the same ground line" share the same y. Items that visually sit ON another item (a lamp on a nightstand) should have y close to the host's TOP edge (host_y - host_height + small_overlap), not the host's center.\n\n` +
+    `Each placement: { "name": "...", "x": int, "y": int, "scale": float (0.05–0.5 of the longest canvas edge), "z": int (higher = drawn on top) }.\n\n` +
+    `COMPOSITION RULES:\n` +
+    `- Pick ONE focal item (the largest, most-evocative item — usually a building, central character, or main prop) and place it in the upper-third center area, scaled 0.30–0.45.\n` +
+    `- All other items are supporting: scale 0.10–0.22, scattered around the focal item with natural irregular spacing. Avoid grid-aligning supporting items.\n` +
+    `- Z-order: items further back (smaller y) get LOWER z; items in front (larger y) get HIGHER z. Items resting ON another item get z = parent.z + 1.\n` +
+    `- Don't cram every part of the canvas — leave ~30% breathing room. Avoid items inside the bottom 8% of the canvas (looks awkward against the frame).\n` +
+    `- Don't overlap two items unless one logically sits on / against / behind the other.\n\n` +
     CONTEXT_RULES[context] +
-    ` Return JSON: { "items": [{"name": "...", "x": int, "y": int, "scale": float, "z": int}, ...] } using the EXACT item names provided.`;
+    `\n\nReturn JSON: { "items": [{"name": "...", "x": int, "y": int, "scale": float, "z": int}, ...] } using the EXACT item names provided.`;
 
   const userMsg = `Items: ${JSON.stringify(items)}`;
 

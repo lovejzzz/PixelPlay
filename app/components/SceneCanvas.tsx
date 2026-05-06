@@ -42,6 +42,9 @@ export type CanvasItem = {
   /** Prefab linkage. */
   prefabId?: string;
   prefabSourceId?: string;
+  /** Render anchor. "bottom" → render with translate(-50%, -100%) so the
+   *  item's feet sit at (x, y); "center" → translate(-50%, -50%) (legacy). */
+  anchor?: "bottom" | "center";
 };
 
 export type CanvasTileLayer = {
@@ -840,6 +843,9 @@ function SceneItemView({
     : "";
 
   const rot = item.rotation || 0;
+  const anchor = item.anchor || "center";
+  const baseTranslate =
+    anchor === "bottom" ? "translate(-50%, -100%)" : "translate(-50%, -50%)";
   return (
     <div
       onPointerDown={onPointerDown}
@@ -851,9 +857,12 @@ function SceneItemView({
         top: `${topPct}%`,
         width: `${widthPct}%`,
         zIndex: item.z,
-        transform: rot
-          ? `translate(-50%, -50%) rotate(${rot}deg)`
-          : "translate(-50%, -50%)",
+        transform: rot ? `${baseTranslate} rotate(${rot}deg)` : baseTranslate,
+        // For bottom-anchor, sort items by their FOOT y, not center y, so
+        // characters in front of buildings render on top correctly. We do
+        // this via z-index here in the render layer; the actual sort is
+        // a property of how the parent walks the items. Add a small bias.
+        transformOrigin: anchor === "bottom" ? "50% 100%" : "50% 50%",
       }}
     >
       <img

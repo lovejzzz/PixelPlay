@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { pixelateImageUrl } from "./lib/pixelate";
 import { buildSpriteZip, sliceSheet } from "./lib/sprites";
 import { checkSheetVariety } from "./lib/varietyCheck";
+import { trimAlphaToContent } from "./lib/trimAlpha";
 import { idbGet, idbSet } from "./lib/storage";
 import { makeSeamless } from "./lib/seamless";
 import { SceneCanvas, type CanvasAsset } from "./components/SceneCanvas";
@@ -111,6 +112,12 @@ type SceneItem = {
   /** Optional speech bubble shown above this character/creature in Play
    *  Mode when the player walks within ~32 px. */
   dialogue?: string;
+  /** Render anchor. "bottom" places the item by its feet (the layout y
+   *  becomes the ground line); "center" places by the midpoint (legacy).
+   *  Default is "center" so existing scenes don't shift. New items spawned
+   *  by composeSceneFromAssets opt into "bottom" so trees, cabins and
+   *  characters all sit on the same ground line. */
+  anchor?: "bottom" | "center";
   /** Special asset-less item kinds. */
   kind?: "trigger" | "light" | "emitter" | "sound";
   /** Message fired into the play-mode log when the player enters a trigger zone. */
@@ -869,7 +876,24 @@ export default function Home() {
       const newIds: string[] = [];
       const updates: Record<string, Asset> = {};
       for (const { name, url } of generated) {
-        const pixelUrl = await applyPixelate(url, gridSize, sourceSize);
+        // For split-items single-frame items, trim transparent borders so
+        // every sprite ends at its actual silhouette. This makes scaling
+        // visually consistent across items (cabin vs tree vs barrel).
+        // Skip for multi-frame sheets (would break the cell grid).
+        let trimmedRaw = url;
+        let trimmedSize = sourceSize;
+        if (isScene && cols === 1 && rows === 1) {
+          try {
+            const t = await trimAlphaToContent(url);
+            if (t.trimmed) {
+              trimmedRaw = t.url;
+              trimmedSize = `${t.width}x${t.height}`;
+            }
+          } catch {
+            /* ignore — fall back to untrimmed */
+          }
+        }
+        const pixelUrl = await applyPixelate(trimmedRaw, gridSize, trimmedSize);
         const id = crypto.randomUUID();
         updates[id] = {
           id,
@@ -877,10 +901,10 @@ export default function Home() {
           assetType: newAssetType,
           perspective,
           pose: effectivePose,
-          rawUrl: url,
+          rawUrl: trimmedRaw,
           pixelUrl,
           gridSize,
-          sourceSize,
+          sourceSize: trimmedSize,
           cols,
           rows,
           createdAt: Date.now(),
@@ -1113,6 +1137,10 @@ export default function Home() {
       }));
     }
 
+    // Snap placements to a 32-px grid so scenes feel composed, not random.
+    const TILE_SIZE = 32;
+    const snap = (n: number) => Math.round(n / TILE_SIZE) * TILE_SIZE;
+
     const sceneItems: SceneItem[] = assetIds.map((assetId, i) => {
       const placement = layout[i] || layout.find((p) => p.name === fresh[assetId]?.prompt);
       const asset = fresh[assetId];
@@ -1120,12 +1148,15 @@ export default function Home() {
       return {
         id: crypto.randomUUID(),
         assetId,
-        x: placement?.x ?? 512,
-        y: placement?.y ?? 512,
+        x: snap(placement?.x ?? 512),
+        y: snap(placement?.y ?? 512),
         scale: placement?.scale ?? 0.2,
         z: placement?.z ?? i,
         animating: isMultiFrame,
         solid: defaultSolid(asset.assetType),
+        // Composed scenes use bottom-anchor so cabins/trees/characters all
+        // sit on the same ground line. Existing legacy scenes keep "center".
+        anchor: "bottom",
       };
     });
 
@@ -1143,9 +1174,10 @@ export default function Home() {
     setActiveSceneId(scene.id);
     setRightTab("scenes");
     setSelectedSceneItemIds([]);
-    // Drop a default ground layer in immediately so the scene isn't a
-    // void. Runs after the setScenes above is committed via the next render.
-    ensureGroundLayer(scene.id);
+    // Drop a default ground layer in immediately so the scene isn't a void.
+    // Use the parser's context hint so interiors get a wood floor, exteriors
+    // grass, etc.
+    ensureGroundLayer(scene.id, context);
   }
 
   function addAssetToScene(sceneId: string, assetId: string, x: number, y: number) {
@@ -1644,15 +1676,30 @@ export default function Home() {
 
   /** Make sure the project has a tile asset usable for ground; create a
    *  procedural grass tile if there isn't one yet. Returns the tile asset id. */
-  function ensureGroundTileAssetId(): string {
-    const existing = Object.values(assets).find((a) => a.assetType === "tile" && a.name === "grass (default)");
+  function ensureGroundTileAssetId(
+    kind: "grass" | "wood" | "stone" = "grass"
+  ): string {
+    const labels = {
+      grass: "grass (default)",
+      wood: "wood floor (default)",
+      stone: "stone floor (default)",
+    } as const;
+    const label = labels[kind];
+    const existing = Object.values(assets).find(
+      (a) => a.assetType === "tile" && a.name === label
+    );
     if (existing) return existing.id;
     const id = crypto.randomUUID();
-    const url = makeGrassTileDataUrl();
-    const grass: Asset = {
+    const url =
+      kind === "wood"
+        ? makeWoodFloorTileDataUrl()
+        : kind === "stone"
+        ? makeStoneFloorTileDataUrl()
+        : makeGrassTileDataUrl();
+    const tile: Asset = {
       id,
-      prompt: "default grass tile",
-      name: "grass (default)",
+      prompt: `default ${kind} tile`,
+      name: label,
       assetType: "tile",
       perspective: "top-down",
       pose: "single",
@@ -1664,14 +1711,21 @@ export default function Home() {
       rows: 1,
       createdAt: Date.now(),
     };
-    setAssets((a) => ({ ...a, [id]: grass }));
+    setAssets((a) => ({ ...a, [id]: tile }));
     return id;
   }
 
   /** Add a fully-painted "Ground" tile layer to a scene if it doesn't have
-   *  one yet. Called when scenes are created so they're never empty. */
-  function ensureGroundLayer(sceneId: string) {
-    const tileAssetId = ensureGroundTileAssetId();
+   *  one yet. Called when scenes are created so they're never empty.
+   *  `context` picks the right tile: interior → wood, aerial → grass,
+   *  exterior (default) → grass. */
+  function ensureGroundLayer(
+    sceneId: string,
+    context?: "interior" | "exterior" | "aerial"
+  ) {
+    const kind: "grass" | "wood" | "stone" =
+      context === "interior" ? "wood" : "grass";
+    const tileAssetId = ensureGroundTileAssetId(kind);
     updateScene(
       sceneId,
       (s) => {
@@ -1985,7 +2039,7 @@ export default function Home() {
       const w = it.scale * longest;
       const aspect = img.naturalWidth / img.naturalHeight;
       const h = w / aspect;
-      drawWithFlip(ctx, img, it.x, it.y, w, h, it.flipX, it.flipY, it.rotation);
+      drawWithFlip(ctx, img, it.x, it.y, w, h, it.flipX, it.flipY, it.rotation, it.anchor);
     }
 
     const compositeDataUrl = canvas.toDataURL("image/png");
@@ -2138,7 +2192,7 @@ export default function Home() {
         const w = it.scale * longest;
         const aspect = img.naturalWidth / img.naturalHeight;
         const h = w / aspect;
-        drawWithFlip(ctx, img, it.x, it.y, w, h, it.flipX, it.flipY, it.rotation);
+        drawWithFlip(ctx, img, it.x, it.y, w, h, it.flipX, it.flipY, it.rotation, it.anchor);
       }
       const compositeUrl = canvas.toDataURL("image/png");
       zip.file(`scenes/${sceneSlug}.composite.png`, dataUrlToBytes(compositeUrl));
@@ -6499,6 +6553,69 @@ function makeGrassTileDataUrl(): string {
   return c.toDataURL("image/png");
 }
 
+/** Procedural 32×32 wood-plank floor tile for interior scenes. */
+function makeWoodFloorTileDataUrl(): string {
+  const c = document.createElement("canvas");
+  c.width = 32;
+  c.height = 32;
+  const ctx = c.getContext("2d")!;
+  // Two horizontal planks of 16 px each, slightly different shades.
+  ctx.fillStyle = "#a07346";
+  ctx.fillRect(0, 0, 32, 16);
+  ctx.fillStyle = "#8c6238";
+  ctx.fillRect(0, 16, 32, 16);
+  // Plank seam (single-pixel dark line between rows).
+  ctx.fillStyle = "#3f2a14";
+  ctx.fillRect(0, 15, 32, 1);
+  ctx.fillRect(0, 31, 32, 1);
+  // Vertical board cuts so the planks read as boards, not slabs.
+  ctx.fillRect(11, 0, 1, 16);
+  ctx.fillRect(22, 16, 1, 16);
+  // Subtle wood-grain specks.
+  let seed = 4242;
+  const rand = () => {
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+    return seed / 0x7fffffff;
+  };
+  for (let i = 0; i < 30; i++) {
+    const x = Math.floor(rand() * 32);
+    const y = Math.floor(rand() * 32);
+    ctx.fillStyle = rand() < 0.5 ? "#754a22" : "#b48452";
+    ctx.fillRect(x, y, rand() < 0.5 ? 2 : 1, 1);
+  }
+  return c.toDataURL("image/png");
+}
+
+/** Procedural 32×32 stone-floor tile for vault / dungeon / shop interiors. */
+function makeStoneFloorTileDataUrl(): string {
+  const c = document.createElement("canvas");
+  c.width = 32;
+  c.height = 32;
+  const ctx = c.getContext("2d")!;
+  ctx.fillStyle = "#5e5a55";
+  ctx.fillRect(0, 0, 32, 32);
+  // 16-px stone blocks with mortar lines.
+  ctx.fillStyle = "#3a3633";
+  ctx.fillRect(0, 15, 32, 1);
+  ctx.fillRect(15, 0, 1, 16);
+  ctx.fillRect(7, 16, 1, 16);
+  ctx.fillRect(23, 16, 1, 16);
+  // Mottle.
+  let seed = 9999;
+  const rand = () => {
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+    return seed / 0x7fffffff;
+  };
+  for (let i = 0; i < 60; i++) {
+    const x = Math.floor(rand() * 32);
+    const y = Math.floor(rand() * 32);
+    const r = rand();
+    ctx.fillStyle = r < 0.4 ? "#6f6b65" : r < 0.7 ? "#4a4642" : "#7a7670";
+    ctx.fillRect(x, y, 1, 1);
+  }
+  return c.toDataURL("image/png");
+}
+
 /** Procedural 64×64 character placeholder so Play mode works even before
  *  the user has generated a real character. */
 function makeDefaultCharacterDataUrl(): string {
@@ -6652,17 +6769,22 @@ function drawWithFlip(
   h: number,
   flipX?: boolean,
   flipY?: boolean,
-  rotationDeg?: number
+  rotationDeg?: number,
+  anchor?: "bottom" | "center"
 ) {
+  // Anchor offsets relative to the (cx, cy) point. center → image is
+  // drawn so its centre lands on (cx, cy); bottom → image's bottom-centre
+  // lands on (cx, cy), i.e. the y given is the ground line.
+  const ay = anchor === "bottom" ? -h : -h / 2;
   if (!flipX && !flipY && !rotationDeg) {
-    ctx.drawImage(img, cx - w / 2, cy - h / 2, w, h);
+    ctx.drawImage(img, cx - w / 2, cy + ay, w, h);
     return;
   }
   ctx.save();
   ctx.translate(cx, cy);
   if (rotationDeg) ctx.rotate((rotationDeg * Math.PI) / 180);
   ctx.scale(flipX ? -1 : 1, flipY ? -1 : 1);
-  ctx.drawImage(img, -w / 2, -h / 2, w, h);
+  ctx.drawImage(img, -w / 2, ay, w, h);
   ctx.restore();
 }
 

@@ -23,6 +23,8 @@ export type PlayerSceneItem = CanvasItem & {
   sound?: { url: string; volume: number; loop: boolean };
   /** Optional speech bubble shown in Play Mode when the player gets close. */
   dialogue?: string;
+  /** "bottom" → translate(-50%, -100%); "center" → translate(-50%, -50%). */
+  anchor?: "bottom" | "center";
 };
 export type PlayerScene = CanvasScene & { items: PlayerSceneItem[] };
 
@@ -851,9 +853,15 @@ export function ScenePlayer({
                 top: `${topPct}%`,
                 width: `${widthPct}%`,
                 zIndex: it.z,
-                transform: rot
-                  ? `translate(-50%, -50%) rotate(${rot}deg)`
-                  : "translate(-50%, -50%)",
+                transform: (() => {
+                  const baseT =
+                    it.anchor === "bottom"
+                      ? "translate(-50%, -100%)"
+                      : "translate(-50%, -50%)";
+                  return rot ? `${baseT} rotate(${rot}deg)` : baseT;
+                })(),
+                transformOrigin:
+                  it.anchor === "bottom" ? "50% 100%" : "50% 50%",
               }}
             >
               <img
