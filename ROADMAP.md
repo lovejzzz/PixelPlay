@@ -194,7 +194,7 @@ Pixel Play's creative-tool context.
       — just plumb the storage. Migration: undefined = use `projectStyle.
       text` as the seed value when first read.
 
-- [ ] **Project MEMORY UI — sidebar editor** — extend the existing
+- [x] **Project MEMORY UI — sidebar editor** — extend the existing
       ProjectStyleSection (the `🎨 Project style — Cozy ▸` collapsible)
       with a second textarea below the existing style input, labeled
       "🧠 Project memory" with placeholder "Things learned about this

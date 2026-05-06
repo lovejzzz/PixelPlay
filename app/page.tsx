@@ -2915,6 +2915,8 @@ export default function Home() {
           onClearRef={() => setProjectStyle((s) => ({ ...s, refUrl: null }))}
           onUploadRef={handleUploadStyleRef}
           hasConfig={hasStyleConfig}
+          memory={getEffectiveProjectMemory()}
+          onChangeMemory={setProjectMemory}
         />
 
         {/* Messages */}
@@ -4185,6 +4187,8 @@ function ProjectStyleSection({
   onClearRef,
   onUploadRef,
   hasConfig,
+  memory,
+  onChangeMemory,
 }: {
   open: boolean;
   onToggle: () => void;
@@ -4194,6 +4198,10 @@ function ProjectStyleSection({
   onClearRef: () => void;
   onUploadRef: (e: React.ChangeEvent<HTMLInputElement>) => void;
   hasConfig: boolean;
+  /** The effective project memory blob (pulled from getEffectiveProjectMemory).
+   *  May be empty string. */
+  memory: string;
+  onChangeMemory: (text: string) => void;
 }) {
   const presetLabel = STYLE_PRESETS.find((p) => p.value === style.preset)?.label || "Cozy";
   return (
@@ -4261,6 +4269,28 @@ function ProjectStyleSection({
                 <input type="file" accept="image/*" className="hidden" onChange={onUploadRef} />
               </label>
             )}
+          </div>
+
+          {/* Project MEMORY blob — Hermes-style frozen-into-prompt knowledge. */}
+          <div className="pt-2 border-t border-farm-wood/40 space-y-1">
+            <div className="text-xs opacity-70">🧠 Project memory:</div>
+            <textarea
+              value={memory}
+              onChange={(e) => onChangeMemory(e.target.value)}
+              placeholder="Things learned about this project — naming conventions, palette, recurring characters… Edit me or let Pixel Play update it after good generations."
+              rows={3}
+              maxLength={PROJECT_MEMORY_CAP}
+              className="w-full bg-farm-ink/60 border-2 border-farm-wood p-2 text-xs focus:outline-none focus:border-farm-grass resize-none"
+            />
+            <div
+              className={`text-[10px] tabular-nums text-right ${
+                memory.length > PROJECT_MEMORY_CAP * 0.9
+                  ? "text-yellow-300"
+                  : "opacity-50"
+              }`}
+            >
+              {memory.length} / {PROJECT_MEMORY_CAP}
+            </div>
           </div>
         </div>
       )}
