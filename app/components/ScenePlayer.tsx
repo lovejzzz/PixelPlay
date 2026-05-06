@@ -979,6 +979,77 @@ export function ScenePlayer({
           </div>
         );
       })()}
+
+      {/* Mini-map — shown only when the world is bigger than the viewport
+          on either axis. Each item is a tiny dot at its scene-coord
+          position, downscaled into a 120×120 box. The current camera
+          rectangle is overlaid as a thin outlined box. Re-rendered every
+          rAF tick via the existing forceTick. */}
+      {(innerWidthPx > viewW || innerHeightPx > viewH) && (() => {
+        const MM = 120;
+        const mmScale = MM / Math.max(scene.width, scene.height);
+        const mmW = scene.width * mmScale;
+        const mmH = scene.height * mmScale;
+        // Visible scene region in scene coords (camera rect on the map).
+        const visW = viewW / FOLLOW_ZOOM;
+        const visH = viewH / FOLLOW_ZOOM;
+        const visX0 = -camX / FOLLOW_ZOOM;
+        const visY0 = -camY / FOLLOW_ZOOM;
+        // Color per item kind for the dots. CanvasAsset doesn't carry the
+        // asset's assetType so we color by kind / link only.
+        const dotColor = (it: PlayerSceneItem): string => {
+          if (it.id === character.id) return "#5fc46a"; // player → green
+          if (it.kind === "light") return "#ffd47a";
+          if (it.kind === "emitter") return "#fff7c2";
+          if (it.linkSceneId) return "#ffa54a"; // door → orange
+          if (it.patrol) return "#9fe0a8";       // patrolling NPC → green-ish
+          return "#cfa580";                      // generic item
+        };
+        return (
+          <div
+            className="absolute bottom-2 right-2 bg-farm-ink/85 border-2 border-farm-wood/70 pointer-events-none z-[1002]"
+            style={{ width: mmW + 2, height: mmH + 2 }}
+            title="Mini-map (Play mode)"
+          >
+            {/* Items */}
+            {sortedItems.map((it) => {
+              if (it.kind === "trigger" || it.kind === "sound") return null;
+              const ns = it.patrol ? npcStateRef.current.get(it.id) : undefined;
+              const ix = it.id === character.id ? posRef.current.x : ns?.x ?? it.x;
+              const iy = it.id === character.id ? posRef.current.y : ns?.y ?? it.y;
+              const isPlayer = it.id === character.id;
+              const size = isPlayer ? 4 : 3;
+              return (
+                <div
+                  key={it.id}
+                  style={{
+                    position: "absolute",
+                    left: ix * mmScale - size / 2 + 1,
+                    top: iy * mmScale - size / 2 + 1,
+                    width: size,
+                    height: size,
+                    background: dotColor(it),
+                    borderRadius: isPlayer ? 0 : "50%",
+                    boxShadow: isPlayer ? "0 0 0 1px rgba(0,0,0,0.6)" : undefined,
+                  }}
+                />
+              );
+            })}
+            {/* Camera viewport rectangle */}
+            <div
+              style={{
+                position: "absolute",
+                left: visX0 * mmScale + 1,
+                top: visY0 * mmScale + 1,
+                width: visW * mmScale,
+                height: visH * mmScale,
+                border: "1px solid rgba(255,255,255,0.65)",
+                pointerEvents: "none",
+              }}
+            />
+          </div>
+        );
+      })()}
     </div>
   );
 }

@@ -155,7 +155,7 @@ to need editing, but the cron should still grep before changing.
       `scene.manifest.json` files. Create a new project record with
       fresh ids, populate assets and scenes. Show success toast.
 
-- [ ] **Scene mini-map in Play mode** — in the bottom-right corner of
+- [x] **Scene mini-map in Play mode** — in the bottom-right corner of
       the scene-player viewport, render a 120×120 div showing a
       downscaled view of the whole scene (background + items), with a
       small viewport-rectangle indicating where the camera is. Update
