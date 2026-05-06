@@ -130,7 +130,7 @@ to need editing, but the cron should still grep before changing.
 
 ### Lower-impact
 
-- [ ] **Procedural default character sprite — better art** — replace the
+- [x] **Procedural default character sprite — better art** — replace the
       crude colored-rectangle drawing in `makeDefaultCharacterDataUrl()`
       with a 32×32 hand-drawn pixel character that matches the cozy
       preset. Same shape (head, body, legs, arms) but with anti-jagged

@@ -6137,41 +6137,118 @@ function makeGrassTileDataUrl(): string {
 /** Procedural 64×64 character placeholder so Play mode works even before
  *  the user has generated a real character. */
 function makeDefaultCharacterDataUrl(): string {
+  // 64×64 canvas drawn as a 32×32 logical sprite (2× nearest-neighbor) — a
+  // cozy-preset straw-hat farmer. Composed via `pix(x, y, w?, h?)` so the
+  // sprite is laid out in logical-pixel coordinates and stays crisp.
   const c = document.createElement("canvas");
   c.width = 64;
   c.height = 64;
   const ctx = c.getContext("2d")!;
   ctx.imageSmoothingEnabled = false;
-  // shadow
+  const pix = (x: number, y: number, w = 1, h = 1) =>
+    ctx.fillRect(x * 2, y * 2, w * 2, h * 2);
+
+  // Palette tuned to the cozy preset (warm, low saturation, brown family).
+  const SKIN = "#f4c89a";
+  const SKIN_SHADOW = "#d8a878";
+  const HAIR = "#3a2410";
+  const HAT = "#c8a87a";
+  const HAT_DARK = "#8a6a3a";
+  const OVERALLS = "#6e4a2a";
+  const OVERALLS_DARK = "#4a3018";
+  const SHIRT = "#c44a2e";
+  const BOOTS = "#2a1a08";
+  const OUTLINE = "rgba(0,0,0,0.45)";
+
+  // Soft ground shadow.
   ctx.fillStyle = "rgba(0,0,0,0.25)";
-  ctx.fillRect(20, 56, 24, 4);
-  // legs
-  ctx.fillStyle = "#3a4a8a";
-  ctx.fillRect(24, 44, 6, 12);
-  ctx.fillRect(34, 44, 6, 12);
-  // body / shirt
-  ctx.fillStyle = "#c44a2e";
-  ctx.fillRect(20, 28, 24, 18);
-  // arms
-  ctx.fillStyle = "#f4c89a";
-  ctx.fillRect(16, 30, 4, 12);
-  ctx.fillRect(44, 30, 4, 12);
-  // head
-  ctx.fillStyle = "#f4c89a";
-  ctx.fillRect(22, 12, 20, 16);
-  // hair
-  ctx.fillStyle = "#5a3a1e";
-  ctx.fillRect(22, 8, 20, 6);
-  ctx.fillRect(20, 12, 2, 8);
-  ctx.fillRect(42, 12, 2, 8);
-  // eyes
-  ctx.fillStyle = "#000";
-  ctx.fillRect(27, 19, 2, 2);
-  ctx.fillRect(35, 19, 2, 2);
-  // outline
-  ctx.strokeStyle = "rgba(0,0,0,0.3)";
-  ctx.lineWidth = 1;
-  ctx.strokeRect(20, 12, 24, 16);
+  pix(11, 28, 10, 1);
+  pix(12, 29, 8, 1);
+
+  // Hair tufts (drawn FIRST so the hat brim covers the top).
+  ctx.fillStyle = HAIR;
+  pix(11, 9, 2, 1);  // left tuft below brim
+  pix(19, 9, 2, 1);  // right tuft below brim
+
+  // Head (skin).
+  ctx.fillStyle = SKIN;
+  pix(11, 9, 10, 5);   // main head block — overlaps the hair line slightly
+  // Trim the corners so it reads more rounded.
+  ctx.clearRect(22, 18, 2, 2);
+  ctx.clearRect(38, 18, 2, 2);
+  ctx.clearRect(22, 26, 2, 2);
+  ctx.clearRect(38, 26, 2, 2);
+
+  // Cheek shadow on the right.
+  ctx.fillStyle = SKIN_SHADOW;
+  pix(19, 12, 1, 1);
+  pix(11, 12, 1, 1);
+
+  // Eyes.
+  ctx.fillStyle = "#1a1208";
+  pix(13, 11, 1, 1);
+  pix(18, 11, 1, 1);
+
+  // Mouth.
+  ctx.fillStyle = "#8a3018";
+  pix(15, 13, 2, 1);
+
+  // Hat brim — covers the top of the head; wide and flat.
+  ctx.fillStyle = HAT;
+  pix(9, 7, 14, 2);
+  // Hat top — narrower, sitting on the brim.
+  pix(12, 4, 8, 3);
+  // Brim shadow line under the brim — sells the depth.
+  ctx.fillStyle = HAT_DARK;
+  pix(9, 9, 14, 1);
+  // A single dark pixel at the band of the hat for a tiny ribbon detail.
+  pix(13, 6, 6, 1);
+
+  // Body / overalls.
+  ctx.fillStyle = OVERALLS;
+  pix(11, 14, 10, 8);
+  // Bib opening showing red shirt underneath.
+  ctx.fillStyle = SHIRT;
+  pix(14, 14, 4, 3);
+  // Bib straps — two thin verticals over the shoulders.
+  ctx.fillStyle = OVERALLS;
+  pix(13, 14, 1, 3);
+  pix(18, 14, 1, 3);
+  // Overall buttons (tiny).
+  ctx.fillStyle = OVERALLS_DARK;
+  pix(13, 17, 1, 1);
+  pix(18, 17, 1, 1);
+
+  // Arms (skin), tucked alongside the body.
+  ctx.fillStyle = SKIN;
+  pix(9, 15, 2, 5);
+  pix(21, 15, 2, 5);
+
+  // Legs / overalls continued.
+  ctx.fillStyle = OVERALLS;
+  pix(11, 22, 4, 4);
+  pix(17, 22, 4, 4);
+  // Center gap reads as "two legs"; explicitly clear it.
+  ctx.clearRect(15 * 2, 22 * 2, 2 * 2, 4 * 2);
+  // Knee shadow.
+  ctx.fillStyle = OVERALLS_DARK;
+  pix(11, 25, 4, 1);
+  pix(17, 25, 4, 1);
+
+  // Boots.
+  ctx.fillStyle = BOOTS;
+  pix(11, 26, 4, 2);
+  pix(17, 26, 4, 2);
+
+  // Outline pass — thin dark pixels on the silhouette edges to ground the
+  // shape against light backgrounds. Drawn at 1 device-pixel for crispness.
+  ctx.fillStyle = OUTLINE;
+  // Head outline
+  ctx.fillRect(11 * 2 - 1, 9 * 2, 1, 5 * 2);   // left
+  ctx.fillRect(21 * 2, 9 * 2, 1, 5 * 2);       // right
+  // Body outline
+  ctx.fillRect(11 * 2 - 1, 14 * 2, 1, 8 * 2);  // left
+  ctx.fillRect(21 * 2, 14 * 2, 1, 8 * 2);      // right
   return c.toDataURL("image/png");
 }
 
