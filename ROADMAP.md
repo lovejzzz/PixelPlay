@@ -101,7 +101,7 @@ to need editing, but the cron should still grep before changing.
       with the modifier habit don't get a newline instead of a submit.
       Keep Shift+Enter for newlines (already works).
 
-- [ ] **Auto-open Settings on first FORGE without a key** — when the user
+- [x] **Auto-open Settings on first FORGE without a key** — when the user
       clicks FORGE while `openaiKey` is empty, open the Settings modal
       instead of letting the request fail with a 401. After they save a
       key, retry the original submit automatically.

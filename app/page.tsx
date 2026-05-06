@@ -325,6 +325,10 @@ export default function Home() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [trashOpen, setTrashOpen] = useState(false);
   const [openaiKey, setOpenaiKey] = useState("");
+  /** When the user clicks FORGE without a key, we stash the prompt here
+   *  and pop the Settings modal. After they save a key the effect below
+   *  replays the submit with the stashed prompt. */
+  const [pendingSubmitPrompt, setPendingSubmitPrompt] = useState<string | null>(null);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   /** In-memory clipboard for scene-item copy/paste. Survives across scenes
    *  in the same session but not across reloads (intentional — copy/paste
@@ -729,12 +733,31 @@ export default function Home() {
     if (currentId) setProjectLifetime(getProjectCost(currentId));
   }, [hydrated, currentId]);
 
+  // Replay a pending submit once the user saves a key in Settings.
+  useEffect(() => {
+    if (!pendingSubmitPrompt || !openaiKey.trim() || busy) return;
+    const prompt = pendingSubmitPrompt;
+    setPendingSubmitPrompt(null);
+    void handleSubmit(null, prompt);
+    // handleSubmit is a stable closure over the latest state in this render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingSubmitPrompt, openaiKey, busy]);
+
   // ------------- handlers -------------
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    const prompt = input.trim();
+  async function handleSubmit(e: React.FormEvent | null, promptOverride?: string) {
+    if (e) e.preventDefault();
+    const prompt = (promptOverride ?? input).trim();
     if (!prompt || busy) return;
+
+    // No key yet → stash the prompt and pop Settings instead of letting
+    // the request fail with a 401. The effect below replays once the key
+    // is saved.
+    if (!openaiKey.trim()) {
+      setPendingSubmitPrompt(prompt);
+      setSettingsOpen(true);
+      return;
+    }
 
     setBusy(true);
     pushPromptHistory(prompt);
