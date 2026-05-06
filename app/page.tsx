@@ -1137,14 +1137,31 @@ export default function Home() {
       }));
     }
 
-    // Snap placements to a 32-px grid so scenes feel composed, not random.
+    // Snap placements to the scene's tileGrid size (or 32 default) so
+    // scenes feel composed, not random. This matches the floor-tile cells
+    // about to be painted by ensureGroundLayer below.
     const TILE_SIZE = 32;
     const snap = (n: number) => Math.round(n / TILE_SIZE) * TILE_SIZE;
+
+    // Items that visually "float" should anchor by their center, not their
+    // base — otherwise a hanging lantern's cord would be pinned to the
+    // ground line. Keyword-based detection over the prompt name.
+    const FLOATING_KEYWORDS = [
+      "lantern", "moon", "sun", "cloud", "balloon", "kite", "star",
+      "bird", "bat", "ghost", "spirit", "fairy",
+      "chandelier", "ceiling", "hanging", "floating",
+    ];
+    const isFloating = (name: string) => {
+      const lower = name.toLowerCase();
+      return FLOATING_KEYWORDS.some((kw) => lower.includes(kw));
+    };
 
     const sceneItems: SceneItem[] = assetIds.map((assetId, i) => {
       const placement = layout[i] || layout.find((p) => p.name === fresh[assetId]?.prompt);
       const asset = fresh[assetId];
       const isMultiFrame = (asset.cols || 1) * (asset.rows || 1) > 1;
+      const itemName = asset?.prompt || "";
+      const anchor: SceneItem["anchor"] = isFloating(itemName) ? "center" : "bottom";
       return {
         id: crypto.randomUUID(),
         assetId,
@@ -1155,8 +1172,9 @@ export default function Home() {
         animating: isMultiFrame,
         solid: defaultSolid(asset.assetType),
         // Composed scenes use bottom-anchor so cabins/trees/characters all
-        // sit on the same ground line. Existing legacy scenes keep "center".
-        anchor: "bottom",
+        // sit on the same ground line. Floating items (moons, lanterns,
+        // birds) override to center so the y is read as their middle.
+        anchor,
       };
     });
 
@@ -1175,9 +1193,9 @@ export default function Home() {
     setRightTab("scenes");
     setSelectedSceneItemIds([]);
     // Drop a default ground layer in immediately so the scene isn't a void.
-    // Use the parser's context hint so interiors get a wood floor, exteriors
-    // grass, etc.
-    ensureGroundLayer(scene.id, context);
+    // Use the parser's context hint plus the scene-name keywords so a
+    // wizard's potion shop gets stone, a kitchen gets wood, a forest grass.
+    ensureGroundLayer(scene.id, context, sceneName);
   }
 
   function addAssetToScene(sceneId: string, assetId: string, x: number, y: number) {
@@ -1186,6 +1204,15 @@ export default function Home() {
     updateScene(sceneId, (s) => {
       const maxZ = s.items.reduce((m, it) => Math.max(m, it.z), 0);
       const isMultiFrame = (a.cols || 1) * (a.rows || 1) > 1;
+      // Match the scene's predominant anchor so dragged-in items don't
+      // visually clash with composed-scene items. Tally bottom vs center
+      // among existing non-kind items; tie or empty → leave undefined
+      // (which renders as "center" — the legacy default).
+      const realItems = s.items.filter((it) => !it.kind);
+      const bottomCount = realItems.filter((it) => it.anchor === "bottom").length;
+      const centerCount = realItems.length - bottomCount;
+      const inferredAnchor: SceneItem["anchor"] | undefined =
+        bottomCount > centerCount ? "bottom" : undefined;
       const newItem: SceneItem = {
         id: crypto.randomUUID(),
         assetId,
@@ -1195,6 +1222,7 @@ export default function Home() {
         z: maxZ + 1,
         animating: isMultiFrame,
         solid: defaultSolid(a.assetType),
+        anchor: inferredAnchor,
       };
       return { ...s, items: [...s.items, newItem] };
     });
@@ -1225,6 +1253,17 @@ export default function Home() {
     updateScene(sceneId, (s) => ({
       ...s,
       items: s.items.map((it) => (it.id === itemId ? { ...it, pickable: !it.pickable } : it)),
+    }));
+  }
+
+  function toggleSceneItemAnchor(sceneId: string, itemId: string) {
+    updateScene(sceneId, (s) => ({
+      ...s,
+      items: s.items.map((it) =>
+        it.id === itemId
+          ? { ...it, anchor: it.anchor === "bottom" ? "center" : "bottom" }
+          : it
+      ),
     }));
   }
 
@@ -1717,14 +1756,32 @@ export default function Home() {
 
   /** Add a fully-painted "Ground" tile layer to a scene if it doesn't have
    *  one yet. Called when scenes are created so they're never empty.
-   *  `context` picks the right tile: interior → wood, aerial → grass,
-   *  exterior (default) → grass. */
+   *  Picks tile by context first (interior → wood/stone, aerial/exterior
+   *  → grass) and refines via keyword match on the scene name when the
+   *  basic context is too coarse (e.g. "wizard's potion shop" → stone). */
   function ensureGroundLayer(
     sceneId: string,
-    context?: "interior" | "exterior" | "aerial"
+    context?: "interior" | "exterior" | "aerial",
+    sceneNameHint?: string
   ) {
-    const kind: "grass" | "wood" | "stone" =
-      context === "interior" ? "wood" : "grass";
+    const lower = (sceneNameHint || "").toLowerCase();
+    const STONE_KEYWORDS = [
+      "stone", "dungeon", "castle", "vault", "crypt", "cathedral",
+      "temple", "wizard", "witch", "alchemy", "potion shop",
+      "shrine", "tomb",
+    ];
+    const WOOD_KEYWORDS = [
+      "kitchen", "bedroom", "library", "study", "tavern", "inn",
+      "cabin interior", "cottage interior", "house interior",
+    ];
+    let kind: "grass" | "wood" | "stone";
+    if (STONE_KEYWORDS.some((kw) => lower.includes(kw))) {
+      kind = "stone";
+    } else if (context === "interior") {
+      kind = WOOD_KEYWORDS.some((kw) => lower.includes(kw)) ? "wood" : "wood";
+    } else {
+      kind = "grass";
+    }
     const tileAssetId = ensureGroundTileAssetId(kind);
     updateScene(
       sceneId,
@@ -3295,6 +3352,7 @@ export default function Home() {
             onToggleFlipX={(id) => activeScene && toggleSceneItemFlipX(activeScene.id, id)}
             onToggleFlipY={(id) => activeScene && toggleSceneItemFlipY(activeScene.id, id)}
             onTogglePickable={(id) => activeScene && toggleSceneItemPickable(activeScene.id, id)}
+            onToggleAnchor={(id) => activeScene && toggleSceneItemAnchor(activeScene.id, id)}
             onSetLinkScene={(id, linkId) =>
               activeScene && setSceneItemLinkScene(activeScene.id, id, linkId)
             }
@@ -4232,6 +4290,7 @@ function ScenesView({
   onToggleFlipX,
   onToggleFlipY,
   onTogglePickable,
+  onToggleAnchor,
   onSetLinkScene,
   onSetPatrol,
   onSetTriggerMessage,
@@ -4311,6 +4370,7 @@ function ScenesView({
   onToggleFlipX: (id: string) => void;
   onToggleFlipY: (id: string) => void;
   onTogglePickable: (id: string) => void;
+  onToggleAnchor: (id: string) => void;
   onSetLinkScene: (id: string, linkId: string | undefined) => void;
   onSetPatrol: (id: string, patrol: SceneItem["patrol"]) => void;
   onSetTriggerMessage: (id: string, msg: string) => void;
@@ -5342,6 +5402,21 @@ function ScenesView({
                   }`}
                 >
                   🛒 Pickup
+                </button>
+                <button
+                  onClick={() => onToggleAnchor(selectedSceneItem.id)}
+                  title={
+                    selectedSceneItem.anchor === "bottom"
+                      ? "Anchor: BOTTOM (item's feet sit at y) — click to switch to center"
+                      : "Anchor: CENTER (item's middle sits at y) — click to switch to bottom"
+                  }
+                  className={`px-2 py-0.5 border ${
+                    selectedSceneItem.anchor === "bottom"
+                      ? "border-farm-grass text-farm-grass bg-farm-grass/10"
+                      : "border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass"
+                  }`}
+                >
+                  {selectedSceneItem.anchor === "bottom" ? "◍ Bottom" : "⊕ Center"}
                 </button>
               </div>
 

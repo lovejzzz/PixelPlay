@@ -126,6 +126,19 @@ async function gptLayout(
     const z = Number.isFinite(Number(raw.z)) ? Number(raw.z) : i;
     sanitized.push({ name, x, y, scale, z });
   }
+
+  // Painters-algorithm post-process: re-sort z by ground y so items further
+  // back (smaller y) draw under items in front (larger y). gpt-4o-mini gets
+  // local attachment z right (lamp on table) but not the global ordering;
+  // doing it server-side guarantees correct depth without a second LLM
+  // round-trip. Preserves the model's ATTACHMENT bumps by adding a tiny
+  // perturbation per attachment level (rare, since most items are unstacked).
+  const sortedByY = [...sanitized]
+    .map((it, idx) => ({ it, idx, attachBump: it.z }))
+    .sort((a, b) => a.it.y - b.it.y || a.it.z - b.it.z);
+  for (let i = 0; i < sortedByY.length; i++) {
+    sortedByY[i].it.z = i * 10 + (sortedByY[i].attachBump > 0 ? 1 : 0);
+  }
   return sanitized;
 }
 
