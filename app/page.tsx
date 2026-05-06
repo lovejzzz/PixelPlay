@@ -216,6 +216,52 @@ const STYLE_PRESETS: { value: StylePreset; label: string; hint: string }[] = [
 const VARIANT_OPTIONS = [1, 2, 4];
 const GRID_PRESETS = [0, 64, 96, 128];
 
+/** Per-asset-type example phrasings for the per-card ✏️ inline edit panel.
+ *  Cycled as the placeholder so a new user has a fresh idea each second. */
+const EDIT_EXAMPLES: Record<AssetType, string[]> = {
+  character: [
+    "with red overalls",
+    "wearing a wizard hat",
+    "now holding a sword",
+    "in winter clothes",
+    "with a beard",
+  ],
+  item: [
+    "now broken",
+    "with sparkles",
+    "now glowing",
+    "in gold",
+    "with a ribbon",
+  ],
+  tile: [
+    "in autumn colors",
+    "with cracks",
+    "snow-covered",
+    "covered in moss",
+    "wet from rain",
+  ],
+  building: [
+    "with a chimney",
+    "windows lit at night",
+    "covered in vines",
+    "in ruins",
+    "in red brick",
+  ],
+  creature: [
+    "wearing a tiny hat",
+    "now sleeping",
+    "in a different color",
+    "with bigger eyes",
+    "with a saddle",
+  ],
+  ui: [
+    "in red instead of blue",
+    "with a glow",
+    "smaller and cleaner",
+    "with a number badge",
+  ],
+};
+
 const PROJECTS_IDB_KEY = "projects";
 const CURRENT_ID_IDB_KEY = "currentProjectId";
 /** Map of `projectId → { activeSceneId, selectedSceneItemIds }`. */
@@ -5453,6 +5499,24 @@ function AssetCard({
 
   const [editingName, setEditingName] = useState(false);
   const [varietyExpanded, setVarietyExpanded] = useState(false);
+  const [editExampleIdx, setEditExampleIdx] = useState(0);
+
+  // Rotate through example edit phrasings as the placeholder while the
+  // inline edit panel is open and the user hasn't typed anything yet.
+  // ~2.2s per example so it doesn't feel jittery; pauses on input.
+  useEffect(() => {
+    if (!editing || editPrompt.length > 0) return;
+    const id = setInterval(() => {
+      setEditExampleIdx((i) => i + 1);
+    }, 2200);
+    return () => clearInterval(id);
+  }, [editing, editPrompt]);
+
+  // Pick an example list for this asset's type. Falls back to "item" for
+  // any legacy assetType not in the table.
+  const editExamples =
+    EDIT_EXAMPLES[asset.assetType] || EDIT_EXAMPLES.item;
+  const editPlaceholder = editExamples[editExampleIdx % editExamples.length];
   const [nameDraft, setNameDraft] = useState(asset.name || "");
   const [tagInput, setTagInput] = useState("");
   const [playing, setPlaying] = useState(false);
@@ -5608,7 +5672,7 @@ function AssetCard({
                 onCancelEdit();
               }
             }}
-            placeholder="e.g. with red overalls; add a scarf; now at night"
+            placeholder={`e.g. ${editPlaceholder}`}
             rows={2}
             className="w-full text-xs bg-farm-ink/60 border border-farm-wood/60 text-farm-parchment px-2 py-1 resize-none focus:outline-none focus:border-farm-grass"
           />

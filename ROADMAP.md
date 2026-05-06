@@ -106,7 +106,7 @@ to need editing, but the cron should still grep before changing.
       instead of letting the request fail with a 401. After they save a
       key, retry the original submit automatically.
 
-- [ ] **Inline-edit textarea rotating placeholder** — the per-card ✏️
+- [x] **Inline-edit textarea rotating placeholder** — the per-card ✏️
       panel's textarea is empty when opened. Cycle through 4-6 example
       phrasings as the placeholder ("with red overalls", "now broken",
       "in winter", "with a hat"). Pick one based on `asset.assetType`
