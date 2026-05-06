@@ -21,6 +21,8 @@ export type PlayerSceneItem = CanvasItem & {
   light?: { radius: number; color: string; intensity: number };
   emitter?: { kind: "sparkle" | "smoke"; rate: number; lifetime: number };
   sound?: { url: string; volume: number; loop: boolean };
+  /** Optional speech bubble shown in Play Mode when the player gets close. */
+  dialogue?: string;
 };
 export type PlayerScene = CanvasScene & { items: PlayerSceneItem[] };
 
@@ -28,6 +30,7 @@ const PLAYER_SPEED = 100; // pixels / second in scene coords
 const ANIM_FPS = 8;
 const FOLLOW_ZOOM = 2;
 const PICKUP_RADIUS = 16; // scene px
+const DIALOGUE_RADIUS = 32; // scene px — speech-bubble proximity
 const TOAST_LIFETIME = 1500; // ms
 
 export function ScenePlayer({
@@ -871,6 +874,48 @@ export function ScenePlayer({
             </div>
           );
         })}
+
+        {/* Speech bubbles for nearby NPCs with dialogue. Re-evaluated each
+            rAF tick (forceTick re-renders the whole component) so the
+            bubble shows up smoothly as the player walks within range. */}
+        {sortedItems
+          .filter((it) => {
+            if (!it.dialogue || it.dialogue.trim() === "") return false;
+            if (it.id === character.id) return false; // never on the player itself
+            const ns = it.patrol ? npcStateRef.current.get(it.id) : undefined;
+            const ix = ns?.x ?? it.x;
+            const iy = ns?.y ?? it.y;
+            const dx = ix - posRef.current.x;
+            const dy = iy - posRef.current.y;
+            return dx * dx + dy * dy <= DIALOGUE_RADIUS * DIALOGUE_RADIUS;
+          })
+          .map((it) => {
+            const ns = it.patrol ? npcStateRef.current.get(it.id) : undefined;
+            const ix = ns?.x ?? it.x;
+            const iy = ns?.y ?? it.y;
+            // Shift the anchor upward by half the sprite height + a small
+            // gap so the bubble sits above the NPC's head, not over it.
+            const spriteH = it.scale * longest;
+            const offsetSceneY = spriteH / 2 + 12;
+            const leftPct = (ix / scene.width) * 100;
+            const topPct = ((iy - offsetSceneY) / scene.height) * 100;
+            return (
+              <div
+                key={`${it.id}-bubble`}
+                className="absolute pointer-events-none"
+                style={{
+                  left: `${leftPct}%`,
+                  top: `${topPct}%`,
+                  transform: "translate(-50%, -100%)",
+                  zIndex: it.z + 1000,
+                }}
+              >
+                <div className="bg-white text-stone-900 text-[10px] px-2 py-1 border-2 border-stone-900 rounded-sm shadow whitespace-pre-wrap max-w-[160px]">
+                  {it.dialogue}
+                </div>
+              </div>
+            );
+          })}
       </div>
 
       {scene.daytime !== undefined && scene.daytime !== 0.5 && (

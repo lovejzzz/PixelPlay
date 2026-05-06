@@ -142,7 +142,7 @@ to need editing, but the cron should still grep before changing.
       configured volume without entering Play mode. Stop on a second
       click or when the audio ends.
 
-- [ ] **NPC dialogue + speech bubble** — add an optional `dialogue?:
+- [x] **NPC dialogue + speech bubble** — add an optional `dialogue?:
       string` field to `SceneItem`. In the side-panel for character/
       creature items, show a textarea below the patrol section. In Play
       mode, when the player walks within 32px of an NPC with non-empty

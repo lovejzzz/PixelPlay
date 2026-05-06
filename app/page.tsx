@@ -108,6 +108,9 @@ type SceneItem = {
   linkSceneId?: string;
   /** NPC patrol — character walks between waypoints in Play Mode. */
   patrol?: { points: Array<{ x: number; y: number }>; loop: boolean; speed: number };
+  /** Optional speech bubble shown above this character/creature in Play
+   *  Mode when the player walks within ~32 px. */
+  dialogue?: string;
   /** Special asset-less item kinds. */
   kind?: "trigger" | "light" | "emitter" | "sound";
   /** Message fired into the play-mode log when the player enters a trigger zone. */
@@ -1218,6 +1221,16 @@ export default function Home() {
       ...s,
       items: s.items.map((it) =>
         it.id === itemId ? { ...it, triggerMessage: msg } : it
+      ),
+    }));
+  }
+
+  function setSceneItemDialogue(sceneId: string, itemId: string, dialogue: string) {
+    const trimmed = dialogue.trim();
+    updateScene(sceneId, (s) => ({
+      ...s,
+      items: s.items.map((it) =>
+        it.id === itemId ? { ...it, dialogue: trimmed || undefined } : it
       ),
     }));
   }
@@ -3015,6 +3028,9 @@ export default function Home() {
             onSetTriggerMessage={(id, msg) =>
               activeScene && setSceneItemTriggerMessage(activeScene.id, id, msg)
             }
+            onSetDialogue={(id, d) =>
+              activeScene && setSceneItemDialogue(activeScene.id, id, d)
+            }
             onAddTriggerZone={() => activeScene && addTriggerZone(activeScene.id)}
             onAddPointLight={() => activeScene && addPointLight(activeScene.id)}
             onSetLight={(id, light) =>
@@ -3920,6 +3936,7 @@ function ScenesView({
   onSetLinkScene,
   onSetPatrol,
   onSetTriggerMessage,
+  onSetDialogue,
   onAddTriggerZone,
   onAddPointLight,
   onSetLight,
@@ -3998,6 +4015,7 @@ function ScenesView({
   onSetLinkScene: (id: string, linkId: string | undefined) => void;
   onSetPatrol: (id: string, patrol: SceneItem["patrol"]) => void;
   onSetTriggerMessage: (id: string, msg: string) => void;
+  onSetDialogue: (id: string, dialogue: string) => void;
   onAddTriggerZone: () => void;
   onAddPointLight: () => void;
   onSetLight: (id: string, light: SceneItem["light"]) => void;
@@ -5152,6 +5170,29 @@ function ScenesView({
                       </div>
                     </>
                   )}
+                </div>
+              )}
+
+              {/* NPC dialogue — shown as a speech bubble in Play Mode when
+                  the player walks within ~32 px of a character/creature. */}
+              {(selectedAsset.assetType === "character" ||
+                selectedAsset.assetType === "creature") && (
+                <div className="text-xs space-y-1">
+                  <label
+                    className="flex items-center gap-2"
+                    title="Shown above this NPC in Play Mode when the player gets close"
+                  >
+                    <span>💬 Dialogue:</span>
+                  </label>
+                  <textarea
+                    value={selectedSceneItem.dialogue || ""}
+                    onChange={(e) =>
+                      onSetDialogue(selectedSceneItem.id, e.target.value)
+                    }
+                    placeholder="e.g. Welcome, traveler! (leave blank for none)"
+                    rows={2}
+                    className="w-full bg-farm-ink/60 border border-farm-wood text-farm-parchment px-2 py-1 resize-none focus:outline-none focus:border-farm-grass"
+                  />
                 </div>
               )}
 
