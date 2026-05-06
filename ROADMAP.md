@@ -64,7 +64,7 @@ to need editing, but the cron should still grep before changing.
       "Retry" button. Retry is a stub for now (logs to console + shows a
       toast "feature coming"); just plumb the data and UI.
 
-- [ ] **Variety-check regenerate stub on AssetCard** — extend the existing
+- [x] **Variety-check regenerate stub on AssetCard** — extend the existing
       `lowVariety` warning badge so clicking it surfaces a small "🔄 try
       again" button. The button is a stub (alert/toast "feature coming")
       until we have a re-roll flow; just plumb the UI.

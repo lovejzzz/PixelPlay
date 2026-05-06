@@ -5173,6 +5173,7 @@ function AssetCard({
   const isTile = asset.assetType === "tile";
 
   const [editingName, setEditingName] = useState(false);
+  const [varietyExpanded, setVarietyExpanded] = useState(false);
   const [nameDraft, setNameDraft] = useState(asset.name || "");
   const [tagInput, setTagInput] = useState("");
   const [playing, setPlaying] = useState(false);
@@ -5265,11 +5266,34 @@ function AssetCard({
             </button>
           )}
           {isMultiFrame && asset.lowVariety && (
-            <div
-              title="Frames look near-identical — gpt-image-1 didn't actually vary the cells. Regenerate (try a more directional prompt, or drop to 1×1) for a usable sheet."
-              className="absolute top-1 left-1 px-1 py-0.5 text-[10px] bg-yellow-900/80 border border-yellow-500/70 text-yellow-200 cursor-help"
-            >
-              ⚠ low variety
+            <div className="absolute top-1 left-1 flex items-center gap-1">
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setVarietyExpanded((v) => !v);
+                }}
+                title="Frames look near-identical — gpt-image-1 didn't actually vary the cells. Click for retry options."
+                className="px-1 py-0.5 text-[10px] bg-yellow-900/80 border border-yellow-500/70 text-yellow-200 hover:bg-yellow-900"
+              >
+                ⚠ low variety
+              </button>
+              {varietyExpanded && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    alert(
+                      "Re-roll coming soon. For now: ✏️ this asset and prompt 'each frame visibly different — distinct poses, varied detail per cell', or drop pose to 1×1."
+                    );
+                    setVarietyExpanded(false);
+                  }}
+                  title="Regenerate this sheet (stub — feature coming)"
+                  className="px-1.5 py-0.5 text-[10px] bg-farm-grass/20 border border-farm-grass/70 text-farm-grass hover:bg-farm-grass/30"
+                >
+                  🔄 Try again
+                </button>
+              )}
             </div>
           )}
         </div>
