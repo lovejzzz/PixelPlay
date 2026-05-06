@@ -35,6 +35,7 @@ const FOLLOW_ZOOM = 2;
 const PICKUP_RADIUS = 16; // scene px
 const DIALOGUE_RADIUS = 32; // scene px — speech-bubble proximity
 const USE_RADIUS = 24; // scene px — "Press E" interaction reach
+const USE_DURATION = 1500; // ms — sprite swap + character freeze window
 const TOAST_LIFETIME = 1500; // ms
 
 export function ScenePlayer({
@@ -80,6 +81,10 @@ export function ScenePlayer({
   const facingRef = useRef<"south" | "north" | "west" | "east">("south");
   const movingRef = useRef(false);
   const frameIdxRef = useRef(0);
+  /** "Using item" window — set when E fires, cleared after USE_DURATION ms.
+   *  While set, the player is frozen at frame 0, can't move, and the target
+   *  item renders its useStateAssetId (if any). */
+  const usingRef = useRef<{ itemId: string; until: number } | null>(null);
   const frameAccumRef = useRef(0);
   // Picked-up items live for the play session only; reset when activeChar changes.
   const pickedIdsRef = useRef<Set<string>>(new Set());
@@ -235,13 +240,21 @@ export function ScenePlayer({
       let dx = 0;
       let dy = 0;
 
+      // Clear the using window if it expired so the player can move again.
+      if (usingRef.current && now >= usingRef.current.until) {
+        usingRef.current = null;
+      }
+      // Suppress all movement input while using an item — the character is
+      // "doing the action" for the duration of the window.
+      const isUsing = usingRef.current !== null;
+
       // Keyboard direction overrides click-to-walk while held.
-      if (dirRef.current.dx !== 0 || dirRef.current.dy !== 0) {
+      if (!isUsing && (dirRef.current.dx !== 0 || dirRef.current.dy !== 0)) {
         targetRef.current = null; // cancel click-target
         const len = Math.hypot(dirRef.current.dx, dirRef.current.dy) || 1;
         dx = (dirRef.current.dx / len) * PLAYER_SPEED * dt;
         dy = (dirRef.current.dy / len) * PLAYER_SPEED * dt;
-      } else if (targetRef.current) {
+      } else if (!isUsing && targetRef.current) {
         const tdx = targetRef.current.x - posRef.current.x;
         const tdy = targetRef.current.y - posRef.current.y;
         const dist = Math.hypot(tdx, tdy);
@@ -610,6 +623,12 @@ export function ScenePlayer({
       e.preventDefault();
       const id = crypto.randomUUID();
       setLogEntries((prev) => [...prev.slice(-9), { id, text: best!.useMessage! }]);
+      // Start the using window: freeze player + (if configured) swap the
+      // item's sprite to its useStateAssetId for USE_DURATION ms.
+      usingRef.current = {
+        itemId: best.id,
+        until: performance.now() + USE_DURATION,
+      };
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
@@ -843,7 +862,15 @@ export function ScenePlayer({
               />
             );
           }
-          const a = assets[it.assetId];
+          // While in the use window, swap this item's asset to its
+          // useStateAssetId (if configured + the alt asset still exists).
+          const useSwap =
+            usingRef.current?.itemId === it.id &&
+            it.useStateAssetId &&
+            assets[it.useStateAssetId]
+              ? assets[it.useStateAssetId]
+              : null;
+          const a = useSwap || assets[it.assetId];
           if (!a) return null;
           const isPlayer = it.id === character.id;
           const npcState =

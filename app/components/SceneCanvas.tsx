@@ -45,6 +45,8 @@ export type CanvasItem = {
   /** Render anchor. "bottom" → render with translate(-50%, -100%) so the
    *  item's feet sit at (x, y); "center" → translate(-50%, -50%) (legacy). */
   anchor?: "bottom" | "center";
+  /** Optional alt-asset id for the brief "use" state in Play mode. */
+  useStateAssetId?: string;
 };
 
 export type CanvasTileLayer = {

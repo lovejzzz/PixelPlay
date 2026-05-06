@@ -126,6 +126,10 @@ type SceneItem = {
    *  Differs from triggerMessage in that it requires a button press, not
    *  proximity alone, so it suits "use" interactions (sit, examine, type). */
   useMessage?: string;
+  /** Asset id to swap-render this item to for ~1.5 s after use. e.g. a
+   *  "desk with monitor on" alt for a "desk" item. Optional; if unset,
+   *  the item keeps its original look during use. */
+  useStateAssetId?: string;
   /** Point-light parameters (when kind === "light"). */
   light?: { radius: number; color: string; intensity: number };
   /** Particle emitter parameters (when kind === "emitter"). */
@@ -1316,6 +1320,21 @@ export default function Home() {
       ...s,
       items: s.items.map((it) =>
         it.id === itemId ? { ...it, useMessage: trimmed || undefined } : it
+      ),
+    }));
+  }
+
+  function setSceneItemUseStateAssetId(
+    sceneId: string,
+    itemId: string,
+    altAssetId: string | undefined
+  ) {
+    updateScene(sceneId, (s) => ({
+      ...s,
+      items: s.items.map((it) =>
+        it.id === itemId
+          ? { ...it, useStateAssetId: altAssetId || undefined }
+          : it
       ),
     }));
   }
@@ -3382,6 +3401,9 @@ export default function Home() {
             onSetUseMessage={(id, m) =>
               activeScene && setSceneItemUseMessage(activeScene.id, id, m)
             }
+            onSetUseStateAssetId={(id, altId) =>
+              activeScene && setSceneItemUseStateAssetId(activeScene.id, id, altId)
+            }
             onAddTriggerZone={() => activeScene && addTriggerZone(activeScene.id)}
             onAddPointLight={() => activeScene && addPointLight(activeScene.id)}
             onSetLight={(id, light) =>
@@ -4313,6 +4335,7 @@ function ScenesView({
   onSetTriggerMessage,
   onSetDialogue,
   onSetUseMessage,
+  onSetUseStateAssetId,
   onAddTriggerZone,
   onAddPointLight,
   onSetLight,
@@ -4394,6 +4417,7 @@ function ScenesView({
   onSetTriggerMessage: (id: string, msg: string) => void;
   onSetDialogue: (id: string, dialogue: string) => void;
   onSetUseMessage: (id: string, msg: string) => void;
+  onSetUseStateAssetId: (id: string, altAssetId: string | undefined) => void;
   onAddTriggerZone: () => void;
   onAddPointLight: () => void;
   onSetLight: (id: string, light: SceneItem["light"]) => void;
@@ -5608,6 +5632,44 @@ function ScenesView({
                   rows={2}
                   className="w-full bg-farm-ink/60 border border-farm-wood text-farm-parchment px-2 py-1 resize-none focus:outline-none focus:border-farm-grass"
                 />
+              </div>
+
+              {/* Use-state alt asset — optional sprite swap during the ~1.5 s
+                  after E fires. Pick another asset in the project to use as
+                  the "active" pose (computer-on, drawer-open, mug-tilted). */}
+              <div className="text-xs space-y-1">
+                <label
+                  className="flex items-center gap-2"
+                  title="Briefly swap to this asset for ~1.5 s when the player presses E"
+                >
+                  <span>🎞 Use state:</span>
+                </label>
+                <select
+                  value={selectedSceneItem.useStateAssetId || ""}
+                  onChange={(e) =>
+                    onSetUseStateAssetId(
+                      selectedSceneItem.id,
+                      e.target.value || undefined
+                    )
+                  }
+                  className="w-full bg-farm-ink/60 border border-farm-wood text-farm-parchment px-2 py-1 focus:outline-none focus:border-farm-grass"
+                >
+                  <option value="">(no swap — keep original sprite)</option>
+                  {Object.values(assets)
+                    .filter(
+                      (a) =>
+                        !a.trashedAt &&
+                        a.id !== selectedSceneItem.assetId
+                    )
+                    .sort((a, b) =>
+                      (a.name || a.prompt).localeCompare(b.name || b.prompt)
+                    )
+                    .map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.name || a.prompt}
+                      </option>
+                    ))}
+                </select>
               </div>
 
               {(selectedAsset.cols || 1) * (selectedAsset.rows || 1) > 1 && (
