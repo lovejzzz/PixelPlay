@@ -82,6 +82,10 @@ type Asset = {
    *  Stripped before persisting to IDB so trash is session-only. Scene
    *  items continue to resolve trashed assets until the trash is emptied. */
   trashedAt?: number;
+  /** Vector embedding (text-embedding-3-small, 1536 dims) over
+   *  `name + prompt + tags`. Generated fire-and-forget after asset
+   *  creation. Used by the gallery's semantic-search fallback. ~6 KB. */
+  embedding?: number[];
 };
 
 type ProjectStyle = {
@@ -767,6 +771,49 @@ export default function Home() {
     if (openaiKey.trim()) h["x-openai-key"] = openaiKey.trim();
     return h;
   }
+
+  /** Fire-and-forget embedding pass for newly-created assets. Looks up
+   *  each id at call time, builds a `name + prompt + tags` text, sends
+   *  one batched embed request, then writes each vector back to its
+   *  asset record. Quiet failure on no-key (route returns 401). */
+  async function embedAssets(ids: string[]) {
+    if (ids.length === 0) return;
+    // Snapshot the texts up-front so we can match indexes to ids reliably.
+    const samples = ids
+      .map((id) => {
+        const a = assets[id];
+        if (!a || a.embedding) return null; // already embedded
+        const text = [a.name || "", a.prompt || "", (a.tags || []).join(" ")]
+          .filter(Boolean)
+          .join(". ")
+          .slice(0, 400);
+        return text ? { id, text } : null;
+      })
+      .filter((x): x is { id: string; text: string } => !!x);
+    if (samples.length === 0) return;
+    try {
+      const res = await fetch("/api/embed", {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({ texts: samples.map((s) => s.text) }),
+      });
+      if (!res.ok) return;
+      const data = (await res.json()) as { embeddings?: number[][] };
+      const embs = data.embeddings || [];
+      if (embs.length !== samples.length) return;
+      setAssets((a) => {
+        const next = { ...a };
+        samples.forEach((s, i) => {
+          if (next[s.id] && embs[i]) {
+            next[s.id] = { ...next[s.id], embedding: embs[i] };
+          }
+        });
+        return next;
+      });
+    } catch {
+      /* silent — semantic search just falls back to substring */
+    }
+  }
   function pushPromptHistory(p: string) {
     const trimmed = p.trim();
     if (!trimmed) return;
@@ -1127,6 +1174,10 @@ export default function Home() {
       }
       setAssets((a) => ({ ...a, ...updates }));
 
+      // Fire-and-forget vector indexing of the new assets so the gallery
+      // search can do semantic match (~$0.0001 per asset).
+      void embedAssets(newIds);
+
       // Variety check for multi-frame sheets.
       if (cols * rows > 1) {
         for (const [id, asset] of Object.entries(updates)) {
@@ -1319,6 +1370,7 @@ export default function Home() {
         createdAt: Date.now(),
       };
       setAssets((a) => ({ ...a, [id]: newAsset }));
+      void embedAssets([id]);
       const rec = recordSpend(currentId, estimateImageCost(quality, "1024x1024", 1), 1, quality as "low" | "medium" | "high");
       setSessionState(rec.session);
       setProjectLifetime(rec.project);

@@ -266,7 +266,7 @@ Pixel Play's creative-tool context.
 
 ### Semantic asset memory
 
-- [ ] **Asset embeddings — generation-time** — when a new asset is created,
+- [x] **Asset embeddings — generation-time** — when a new asset is created,
       fire one cheap `gpt-4o-mini` embeddings call with the asset's
       `name + prompt + tags` text, store the resulting vector on
       `Asset.embedding?: number[]`. Asset record grows by ~6 KB; well
