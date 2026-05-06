@@ -285,6 +285,147 @@ Pixel Play's creative-tool context.
   the form via tool calls. Substantial — needs a `/api/agent` route, tool
   schema, conversation state, multi-turn UI redesign.
 
+---
+
+## Phase 8 — Polish & Ship
+
+Make the project presentable and export-friendly for real game developers.
+
+### Documentation & onboarding
+
+- [ ] **README overhaul** — rewrite README.md with feature list, environment
+      variable reference (OPENAI_API_KEY, OPENAI_EMBED_MODEL, OPENAI_CHAT_MODEL),
+      quick-start steps, and a "What's inside" section covering FORGE / Scene
+      editor / Play mode / AI memory. No screenshots (can't generate); use
+      ASCII art or text diagrams for structure.
+
+- [ ] **First-visit onboarding modal** — detect a `"onboarded"` localStorage
+      flag on mount. If absent, show a 4-step modal: (1) FORGE to create assets,
+      (2) drag to Scene, (3) Play mode walkthrough, (4) Settings for API key.
+      Each step has a title + 2-sentence body + Next button; final step has a
+      "Get started" button that sets the flag and closes. Dismissible at any
+      step via ✕.
+
+### Game-engine export
+
+- [ ] **Tiled JSON export** — add an "Export Tiled JSON" button in ScenesView
+      (next to the existing Export PNG/ZIP). Serialises the active scene's tile
+      grid layers into a Tiled 1.10-compatible `.tmj` file (JSON map format):
+      `tiledversion`, `width`/`height` in tiles, `tilewidth`/`tileheight`,
+      one `tilelayer` per tile grid layer with a flat `data` array, and one
+      `objectgroup` layer listing each non-tile CanvasItem as a Tiled object
+      with `x`, `y`, `width`, `height`, `name` (asset name), `type`
+      (assetType). Triggers a JSON file download.
+
+- [ ] **Sprite atlas manifest in ZIP export** — when `exportProject` bundles
+      the ZIP, also write an `atlas.json` at the root. Format: array of entries
+      `{assetId, name, assetType, file, frameWidth, frameHeight, cols, rows,
+      pivotX, pivotY}` where pivot defaults to bottom-center (0.5, 1.0) for
+      characters and center (0.5, 0.5) for items/scenes. Unity's
+      TexturePacker-compatible importer and Godot's AtlasTexture can both read
+      this shape. No changes to existing ZIP structure — just an extra file.
+
+---
+
+## Phase 9 — Multi-model Image Generation
+
+Let users choose a cheaper/faster image provider as an alternative to
+gpt-image-1 (~$0.04/image). FAL.ai's Flux Schnell runs at ~$0.003/image.
+
+- [ ] **FAL.ai route** — new `app/api/generate-fal/route.ts`. Accepts the
+      same body shape as `/api/generate` (prompt, size, quality, n). Calls
+      the FAL REST API (`https://fal.run/fal-ai/flux/schnell`) with
+      `x-fal-key` from header or env `FAL_API_KEY`. Returns `{urls: string[],
+      cost: number}` in the same shape the client expects. No image editing
+      or sprite-sheet support in v1 — single images only.
+
+- [ ] **Provider selector in Settings** — add an `imageProvider:
+      "openai" | "fal"` field to localStorage prefs (default `"openai"`).
+      SettingsModal gains a "Image model" radio group: "OpenAI gpt-image-1"
+      and "FAL Flux Schnell (fast/cheap)". Showing FAL reveals a second API
+      key input (`fal-key`) stored separately in localStorage. Both inputs
+      get the same 👁 toggle + "Test" button pattern as the existing OpenAI
+      key field.
+
+- [ ] **Client dispatcher** — in `app/page.tsx`, `handleSubmit` and
+      `editAssetInline` read `imageProvider` from prefs and POST to either
+      `/api/generate` or `/api/generate-fal` accordingly. Pass the FAL key
+      via `x-fal-key` header (same as `x-openai-key` pattern). FAL route
+      returns a single URL per image; the existing multi-image flow maps
+      over `urls[]` identically. Cost tracking uses the returned `cost`
+      field from whichever route fired.
+
+---
+
+## Phase 10 — Concierge Agent
+
+Promote Concierge from SKIP-CRON to a fully cron-able multi-fire build.
+Multi-turn chat agent that *drives* the FORGE form via tool calls — user
+says "make me a cozy forest tileset" and the agent generates the assets.
+
+- [ ] **Agent tool schema** — define four tools the agent can call:
+      `forge_asset` (prompt + mode + quality → triggers generation),
+      `list_assets` (returns current asset names/types as context),
+      `set_project_memory` (writes a string to project MEMORY blob),
+      `apply_recipe` (by recipe name or id). Store the schema as
+      `app/lib/agentTools.ts` exporting a `AGENT_TOOLS` constant
+      (OpenAI function-calling format).
+
+- [ ] **/api/agent route** — `app/api/agent/route.ts`. Streaming SSE
+      endpoint. Accepts `{messages: ChatMessage[], projectContext: string}`.
+      Calls `gpt-4o` with the agent tool schema; streams back deltas.
+      When a `tool_use` block arrives, returns it as a `data: {tool, args}`
+      SSE event for the client to execute; client POSTs
+      `tool_result` back in the next message turn. Capped at 8 turns to
+      prevent runaway loops. Uses `x-openai-key` header.
+
+- [ ] **Agent chat panel UI** — collapsible drawer at the bottom of the
+      left (FORGE) panel. Toggle with a "🤖 Agent" button in the panel
+      header. Drawer shows a scrolling message list (user/assistant/tool
+      chips) and a text input. Sends to `/api/agent`, streams response,
+      renders tool-call chips ("⚙ forge_asset: warrior elf…") inline.
+      No structural refactor of FORGE form — agent chips appear above it.
+
+- [ ] **Agent executes tools** — when the stream emits a `forge_asset`
+      tool event, the client calls `handleSubmit` with the tool's prompt
+      and mode. `list_assets` returns the current `allAssets` snapshot as
+      a JSON string back to the agent. `set_project_memory` calls the
+      existing `setProjectMemory` mutator. `apply_recipe` calls
+      `applyRecipe`. Tool results are sent as the next user message to
+      continue the conversation.
+
+---
+
+## Phase 11 — Share & Collaborate
+
+Let users share projects via a link and (optionally) co-edit in real time.
+
+- [ ] **Project share link — upload** — new `/api/share/route.ts` that
+      accepts a multipart ZIP body (same format as exportProject), stores
+      it in Vercel Blob (`@vercel/blob`) with a random UUID key, and
+      returns `{url, id}`. Button "🔗 Share link" appears next to
+      "⬇ Export ZIP" in the project switcher — clicking exports the ZIP
+      in-browser, POSTs it to `/api/share`, then copies the returned URL
+      to clipboard and shows a toast "Link copied!".
+
+- [ ] **Project share link — import** — on page load, detect
+      `?import=<id>` in `window.location.search`. If present, fetch the
+      blob URL via `/api/share?id=<id>` (GET returns a redirect to the
+      blob), pipe through the existing `importProject(file)` flow, and
+      clear the query param after import. Shows a "Importing shared
+      project…" spinner in the header during the fetch.
+
+- [ ] **Real-time scene sync** — add a `syncEnabled` toggle in project
+      settings (off by default). When on, open a Supabase Realtime channel
+      named `scene:<projectId>:<sceneId>`. Broadcast each `updateScene`
+      call as a JSON patch; receive remote patches and apply via
+      `updateScene(..., { record: false })` so remote edits don't pollute
+      the undo stack. Show a green "● live" dot in the scene header when
+      the channel is open. Requires `NEXT_PUBLIC_SUPABASE_URL` +
+      `NEXT_PUBLIC_SUPABASE_ANON_KEY` env vars.
+
+---
+
 ## When everything in every phase is checked
 
 - Append a "ALL PHASES COMPLETE" entry to `CRON-LOG.md` with the date.
