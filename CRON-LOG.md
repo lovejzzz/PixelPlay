@@ -37,8 +37,11 @@ fire every 5 minutes and tick off 3 unchecked items per fire.
 
 User asked for a deep audit after dogfooding. New roadmap added as
 Phase 6 — 17 items in priority order, plus 7 `[SKIP-CRON]` items
-deferred to manual work. Cron pace: 1 item per fire, hourly at :13
-(7-day auto-expiry caps total runs at 168, well above what's needed).
+deferred to manual work. Cron pace: 1 item per fire, every 5 minutes
+(7-day auto-expiry caps total runs at ~2000, well above what's needed).
 Items concentrate on UX polish (camera follow, fill tools, soft-delete,
 duplicate scene, ⌘+Enter, settings test-connection) rather than
 deep features.
+
+2026-05-06 fire #1 — Per-item perspective derived from scene context:
+`app/api/generate/route.ts` now uses a new `perspectiveForItem(name, context, formPerspective)` helper instead of a single shared hint string. Interior context forces all items to a front-facing pixel-art view; aerial context forces strict top-down orthographic; exterior context picks per-item via a keyword list (cabin/house/tree/character/etc → front-facing, ground props → top-down). User's `side-view` form selection still wins universally. Verified with a small node script — boulder/skull stay top-down, cabin/tree/dock get front-facing. Build clean. Next: Soft-delete assets with a session trash.

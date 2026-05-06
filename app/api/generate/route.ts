@@ -69,6 +69,41 @@ function perspectiveHint(p: Perspective | undefined, assetType?: AssetType) {
   return "top-down view, ";
 }
 
+/** Per-item perspective for split-items scenes. Derived from the parser's
+ *  scene context so a "cabin in the forest" gets a front-on cabin and
+ *  top-down trees / rocks / signs, while a "cozy bedroom" gets all items
+ *  drawn front-on (the way furniture reads in a top-down room view).
+ *
+ *  When `context` is undefined we fall back to the user's form-level
+ *  `perspective` setting, preserving prior behavior. */
+const FRONT_ON_KEYWORDS = [
+  "cabin", "house", "cottage", "shop", "tavern", "tower", "castle",
+  "barn", "shed", "hut", "tent", "lighthouse", "windmill", "stall",
+  "dock", "bridge", "well", "fountain", "statue", "tombstone",
+  "gravestone", "fence", "gate", "signpost", "sign", "lamp post",
+  "lamppost", "fire hydrant", "tree", "pine", "fir", "oak", "cactus",
+  "person", "character", "wizard", "knight", "farmer", "villager",
+  "creature", "monster", "animal", "boat", "ship", "cart", "wagon",
+  "barrel", "crate", "chest",
+];
+function perspectiveForItem(
+  itemName: string,
+  context: SceneContext | undefined,
+  formPerspective: Perspective | undefined
+): string {
+  if (formPerspective === "side-view") return "viewed from the side, ";
+  if (context === "interior") return "front-facing pixel-art view, ";
+  if (context === "aerial") return "strict top-down orthographic view, ";
+  if (context === "exterior") {
+    const lower = itemName.toLowerCase();
+    const isFrontOn = FRONT_ON_KEYWORDS.some((kw) => lower.includes(kw));
+    return isFrontOn
+      ? "front-facing pixel-art view, "
+      : "top-down view, ";
+  }
+  return "top-down view, ";
+}
+
 function typeHint(t?: AssetType) {
   switch (t) {
     case "character": return "character sprite, full body, ";
@@ -200,12 +235,14 @@ export async function POST(req: NextRequest) {
       }
       // Slim prompt for split items — drops assetType-specific framing
       // (irrelevant when each item could be anything), keeps perspective +
-      // preset + project style + transparency.
-      const splitPerspectiveHint =
-        perspective === "side-view" ? "viewed from the side, " : "top-down view, ";
+      // preset + project style + transparency. Per-item perspective is
+      // derived from the scene's context: interior → all items front-on,
+      // aerial → all top-down, exterior → buildings front-on, ground props
+      // top-down. Falls back to the form's `perspective` field if context
+      // doesn't dictate.
       const slimPromptFor = (itemName: string) =>
         presetPrefix +
-        splitPerspectiveHint +
+        perspectiveForItem(itemName, sceneContext, perspective) +
         bgHint +
         "single " +
         itemName +

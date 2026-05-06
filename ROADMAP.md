@@ -41,7 +41,7 @@ to need editing, but the cron should still grep before changing.
 
 ### High-impact
 
-- [ ] **Per-item perspective derived from scene context** — when split-items
+- [x] **Per-item perspective derived from scene context** — when split-items
       generates assets for a scene, currently every item uses the form's
       `perspective` setting. Update `app/api/generate/route.ts` to:
       interior context → all items "front-on / facing camera"; aerial
