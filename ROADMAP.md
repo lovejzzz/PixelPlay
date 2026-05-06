@@ -69,7 +69,7 @@ to need editing, but the cron should still grep before changing.
       again" button. The button is a stub (alert/toast "feature coming")
       until we have a re-roll flow; just plumb the UI.
 
-- [ ] **Settings "Test connection" button** — in the Settings modal, add a
+- [x] **Settings "Test connection" button** — in the Settings modal, add a
       button that does `GET /v1/models` with the entered key (limit=1, low
       cost) and shows ✓ Connected / ✗ Invalid inline. The fetch goes
       direct to OpenAI from the browser using the user's key. Show a

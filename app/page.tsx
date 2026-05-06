@@ -3070,6 +3070,45 @@ function SettingsModal({
 }) {
   const [draft, setDraft] = useState(initialKey);
   const [show, setShow] = useState(false);
+  const [testStatus, setTestStatus] = useState<"idle" | "testing" | "ok" | "fail">("idle");
+  const [testMsg, setTestMsg] = useState("");
+
+  async function testConnection() {
+    const key = draft.trim();
+    if (!key) {
+      setTestStatus("fail");
+      setTestMsg("Enter a key first.");
+      return;
+    }
+    setTestStatus("testing");
+    setTestMsg("");
+    try {
+      const res = await fetch("/api/test-key", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-openai-key": key },
+      });
+      const data = (await res.json()) as { ok?: boolean; error?: string };
+      if (data.ok) {
+        setTestStatus("ok");
+        setTestMsg("Connected. Key accepted by OpenAI.");
+      } else {
+        setTestStatus("fail");
+        setTestMsg(data.error || "Unknown error");
+      }
+    } catch (err) {
+      setTestStatus("fail");
+      setTestMsg(err instanceof Error ? err.message : "Network error");
+    }
+  }
+
+  // Reset status if the user edits the key after running a test.
+  useEffect(() => {
+    if (testStatus !== "idle") {
+      setTestStatus("idle");
+      setTestMsg("");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft]);
   return (
     <div
       className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4"
@@ -3115,7 +3154,32 @@ function SettingsModal({
             >
               {show ? "🙈" : "👁"}
             </button>
+            <button
+              type="button"
+              onClick={testConnection}
+              disabled={testStatus === "testing" || !draft.trim()}
+              className="px-2 py-1 text-xs border border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass disabled:opacity-40 disabled:cursor-not-allowed"
+              title="Verify the key against OpenAI"
+            >
+              {testStatus === "testing" ? "⏳" : "Test"}
+            </button>
           </div>
+          {testStatus !== "idle" && (
+            <div
+              className={
+                "text-[11px] " +
+                (testStatus === "ok"
+                  ? "text-farm-grass"
+                  : testStatus === "fail"
+                  ? "text-red-300"
+                  : "opacity-70")
+              }
+            >
+              {testStatus === "testing" && "Testing…"}
+              {testStatus === "ok" && `✓ ${testMsg}`}
+              {testStatus === "fail" && `✗ ${testMsg}`}
+            </div>
+          )}
           <p className="text-[11px] opacity-60">
             Get a key at{" "}
             <a
