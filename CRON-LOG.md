@@ -32,3 +32,13 @@ fire every 5 minutes and tick off 3 unchecked items per fire.
 2026-05-05 fire #11 — ROADMAP COMPLETE — nothing to do.
 
 2026-05-05 fire #12 — ROADMAP COMPLETE — nothing to do.
+
+## 2026-05-06 — Phase 6 begins (polish & robustness)
+
+User asked for a deep audit after dogfooding. New roadmap added as
+Phase 6 — 17 items in priority order, plus 7 `[SKIP-CRON]` items
+deferred to manual work. Cron pace: 1 item per fire, hourly at :13
+(7-day auto-expiry caps total runs at 168, well above what's needed).
+Items concentrate on UX polish (camera follow, fill tools, soft-delete,
+duplicate scene, ⌘+Enter, settings test-connection) rather than
+deep features.
