@@ -77,6 +77,7 @@ export function SceneCanvas({
   activeTileLayerId,
   onPaintCell,
   onEraseCell,
+  onFillRect,
   onDropPrefab,
   onDropAsset,
   snap = 0,
@@ -92,11 +93,13 @@ export function SceneCanvas({
   onScaleItem?: (id: string, scale: number) => void;
   onRotateItem?: (id: string, rotationDeg: number) => void;
   /** Tile painting mode: "off" disables; "paint" stamps active layer's tile; "erase" removes. */
-  paintMode?: "off" | "paint" | "erase";
+  paintMode?: "off" | "paint" | "erase" | "fillrect";
   /** Active tile-grid layer the paint/erase gesture writes into. */
   activeTileLayerId?: string | null;
   onPaintCell?: (layerId: string, x: number, y: number) => void;
   onEraseCell?: (layerId: string, x: number, y: number) => void;
+  /** Drag-from-corner gesture: paints a filled rectangle of cells on pointerup. */
+  onFillRect?: (layerId: string, x0: number, y0: number, x1: number, y1: number) => void;
   /** Called when a prefab is dropped from the prefab library. */
   onDropPrefab?: (prefabId: string, x: number, y: number) => void;
   /** Called when an asset is dragged from the gallery into the scene. */
@@ -125,6 +128,7 @@ export function SceneCanvas({
     | { kind: "pan"; pointerId: number; startClientX: number; startClientY: number; startScrollLeft: number; startScrollTop: number; scroller: HTMLElement }
     | { kind: "rubber"; pointerId: number; startX: number; startY: number; curX: number; curY: number }
     | { kind: "paint"; pointerId: number; mode: "paint" | "erase"; layerId: string }
+    | { kind: "fillrect"; pointerId: number; layerId: string; startX: number; startY: number; curX: number; curY: number }
     | null
   >(null);
   const [hoverId, setHoverId] = useState<string | null>(null);
@@ -212,18 +216,32 @@ export function SceneCanvas({
   function onCanvasPointerDown(e: React.PointerEvent) {
     if (e.target !== e.currentTarget) return; // bubbled from a child
     // Paint mode: stamp the active layer's tile (or erase) under the cursor.
-    if (paintMode !== "off" && activeTileLayerId && (onPaintCell || onEraseCell)) {
+    if (paintMode !== "off" && activeTileLayerId && (onPaintCell || onEraseCell || onFillRect)) {
       if (e.button !== 0) return;
       e.preventDefault();
       const { x, y } = pointToCell(e.clientX, e.clientY);
-      if (paintMode === "paint" && onPaintCell) onPaintCell(activeTileLayerId, x, y);
-      else if (paintMode === "erase" && onEraseCell) onEraseCell(activeTileLayerId, x, y);
-      setDrag({
-        kind: "paint",
-        pointerId: e.pointerId,
-        mode: paintMode,
-        layerId: activeTileLayerId,
-      });
+      if (paintMode === "fillrect") {
+        // Just track the start corner; preview rectangle renders during move,
+        // commit happens on pointerup.
+        setDrag({
+          kind: "fillrect",
+          pointerId: e.pointerId,
+          layerId: activeTileLayerId,
+          startX: x,
+          startY: y,
+          curX: x,
+          curY: y,
+        });
+      } else {
+        if (paintMode === "paint" && onPaintCell) onPaintCell(activeTileLayerId, x, y);
+        else if (paintMode === "erase" && onEraseCell) onEraseCell(activeTileLayerId, x, y);
+        setDrag({
+          kind: "paint",
+          pointerId: e.pointerId,
+          mode: paintMode === "paint" ? "paint" : "erase",
+          layerId: activeTileLayerId,
+        });
+      }
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
       return;
     }
@@ -363,6 +381,9 @@ export function SceneCanvas({
       const { x, y } = pointToCell(e.clientX, e.clientY);
       if (drag.mode === "paint" && onPaintCell) onPaintCell(drag.layerId, x, y);
       else if (drag.mode === "erase" && onEraseCell) onEraseCell(drag.layerId, x, y);
+    } else if (drag.kind === "fillrect") {
+      const { x, y } = pointToCell(e.clientX, e.clientY);
+      setDrag({ ...drag, curX: x, curY: y });
     } else if (drag.kind === "rubber") {
       setDrag({ ...drag, curX: sc.x, curY: sc.y });
     }
@@ -385,6 +406,8 @@ export function SceneCanvas({
           .map((it) => it.id);
         onSelectionChange(hits);
       }
+    } else if (drag.kind === "fillrect" && onFillRect) {
+      onFillRect(drag.layerId, drag.startX, drag.startY, drag.curX, drag.curY);
     }
     setDrag(null);
   }
@@ -691,6 +714,34 @@ export function SceneCanvas({
             }}
           />
         )}
+
+        {/* Fill-rect preview — yellow tinted rectangle covering full cells. */}
+        {drag?.kind === "fillrect" && scene.tileGrid && (() => {
+          const ts = scene.tileGrid.tileSize;
+          const xa = Math.min(drag.startX, drag.curX);
+          const xb = Math.max(drag.startX, drag.curX);
+          const ya = Math.min(drag.startY, drag.curY);
+          const yb = Math.max(drag.startY, drag.curY);
+          const px = xa * ts;
+          const py = ya * ts;
+          const pw = (xb - xa + 1) * ts;
+          const ph = (yb - ya + 1) * ts;
+          const leftPct = (px / scene.width) * 100;
+          const topPct = (py / scene.height) * 100;
+          const widthPct = (pw / scene.width) * 100;
+          const heightPct = (ph / scene.height) * 100;
+          return (
+            <div
+              className="absolute pointer-events-none border-2 border-yellow-400/80 bg-yellow-300/20"
+              style={{
+                left: `${leftPct}%`,
+                top: `${topPct}%`,
+                width: `${widthPct}%`,
+                height: `${heightPct}%`,
+              }}
+            />
+          );
+        })()}
 
         {/* Coords readout — bottom-right corner of canvas */}
         {drag?.kind === "rubber" && (() => {

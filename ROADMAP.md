@@ -77,7 +77,7 @@ to need editing, but the cron should still grep before changing.
 
 ### Medium-impact
 
-- [ ] **Tile painter fill-rectangle and fill-all** — in the TilePaintBar
+- [x] **Tile painter fill-rectangle and fill-all** — in the TilePaintBar
       panel, add two new buttons next to Paint/Erase: "▣ Fill rect" (drag
       from corner to corner, paints all cells in the rectangle on
       pointerup) and "⬛ Fill layer" (one click — paints every cell on the

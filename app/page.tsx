@@ -318,7 +318,7 @@ export default function Home() {
   const [historyIdx, setHistoryIdx] = useState(-1); // -1 = not navigating
   const [sceneSnap, setSceneSnap] = useState(0); // 0 / 8 / 16 / 32
   const [sceneZoom, setSceneZoom] = useState(1); // 1 / 2 / 4
-  const [paintMode, setPaintMode] = useState<"off" | "paint" | "erase">("off");
+  const [paintMode, setPaintMode] = useState<"off" | "paint" | "erase" | "fillrect">("off");
   const [activeTileLayerId, setActiveTileLayerId] = useState<string | null>(null);
   const [playMode, setPlayMode] = useState(false);
   const [activeCharacterId, setActiveCharacterId] = useState<string | null>(null);
@@ -1239,6 +1239,57 @@ export default function Home() {
         if (filtered.length === l.cells.length) return l;
         return { ...l, cells: filtered };
       });
+      return { ...s, tileGrid: { ...s.tileGrid, layers } };
+    });
+  }
+
+  function fillTileRect(
+    sceneId: string,
+    layerId: string,
+    x0: number,
+    y0: number,
+    x1: number,
+    y1: number
+  ) {
+    updateScene(sceneId, (s) => {
+      if (!s.tileGrid) return s;
+      const xa = Math.min(x0, x1);
+      const xb = Math.max(x0, x1);
+      const ya = Math.min(y0, y1);
+      const yb = Math.max(y0, y1);
+      const layers = s.tileGrid.layers.map((l) => {
+        if (l.id !== layerId) return l;
+        // Build a Set of "x,y" keys we already have; add any missing cells.
+        const have = new Set(l.cells.map((c) => `${c.x},${c.y}`));
+        const next = [...l.cells];
+        for (let y = ya; y <= yb; y++) {
+          for (let x = xa; x <= xb; x++) {
+            const k = `${x},${y}`;
+            if (!have.has(k)) {
+              have.add(k);
+              next.push({ x, y });
+            }
+          }
+        }
+        return { ...l, cells: next };
+      });
+      return { ...s, tileGrid: { ...s.tileGrid, layers } };
+    });
+  }
+
+  function fillTileLayer(sceneId: string, layerId: string) {
+    updateScene(sceneId, (s) => {
+      if (!s.tileGrid) return s;
+      const ts = s.tileGrid.tileSize;
+      const cols = Math.ceil(s.width / ts);
+      const rows = Math.ceil(s.height / ts);
+      const cells: Array<{ x: number; y: number }> = [];
+      for (let y = 0; y < rows; y++) {
+        for (let x = 0; x < cols; x++) cells.push({ x, y });
+      }
+      const layers = s.tileGrid.layers.map((l) =>
+        l.id === layerId ? { ...l, cells } : l
+      );
       return { ...s, tileGrid: { ...s.tileGrid, layers } };
     });
   }
@@ -2726,6 +2777,12 @@ export default function Home() {
             onEraseCell={(layerId, x, y) =>
               activeScene && eraseTileCell(activeScene.id, layerId, x, y)
             }
+            onFillRect={(layerId, x0, y0, x1, y1) =>
+              activeScene && fillTileRect(activeScene.id, layerId, x0, y0, x1, y1)
+            }
+            onFillLayer={(layerId) =>
+              activeScene && fillTileLayer(activeScene.id, layerId)
+            }
             onSetTileSize={(n) => activeScene && setTileSize(activeScene.id, n)}
             prefabs={currentProject?.prefabs || {}}
             onSavePrefab={(name, items) => savePrefab(name, items)}
@@ -3551,6 +3608,8 @@ function ScenesView({
   onReorderTileLayers,
   onPaintCell,
   onEraseCell,
+  onFillRect,
+  onFillLayer,
   onSetTileSize,
   prefabs,
   onSavePrefab,
@@ -3613,8 +3672,8 @@ function ScenesView({
   onAddSoundTrigger: () => void;
   onSetSound: (id: string, sound: SceneItem["sound"]) => void;
   onSetDaytime: (d: number) => void;
-  paintMode: "off" | "paint" | "erase";
-  onPaintModeChange: (m: "off" | "paint" | "erase") => void;
+  paintMode: "off" | "paint" | "erase" | "fillrect";
+  onPaintModeChange: (m: "off" | "paint" | "erase" | "fillrect") => void;
   activeTileLayerId: string | null;
   onActiveTileLayerChange: (id: string | null) => void;
   onAddTileLayer: (tileAssetId?: string) => void;
@@ -3625,6 +3684,8 @@ function ScenesView({
   onReorderTileLayers: (from: number, to: number) => void;
   onPaintCell: (layerId: string, x: number, y: number) => void;
   onEraseCell: (layerId: string, x: number, y: number) => void;
+  onFillRect: (layerId: string, x0: number, y0: number, x1: number, y1: number) => void;
+  onFillLayer: (layerId: string) => void;
   onSetTileSize: (n: number) => void;
   prefabs: Record<string, Prefab>;
   onSavePrefab: (name: string, items: SceneItem[]) => void;
@@ -4003,6 +4064,7 @@ function ScenesView({
             onToggleLayerVisible={onToggleLayerVisible}
             onReorderTileLayers={onReorderTileLayers}
             onSetTileSize={onSetTileSize}
+            onFillLayer={onFillLayer}
           />
           <div className="overflow-auto">
             <SceneCanvas
@@ -4018,6 +4080,7 @@ function ScenesView({
               activeTileLayerId={activeTileLayerId}
               onPaintCell={onPaintCell}
               onEraseCell={onEraseCell}
+              onFillRect={onFillRect}
               onDropPrefab={onInstantiatePrefab}
               onDropAsset={onDropAsset}
               snap={snap}
@@ -4832,11 +4895,12 @@ function TilePaintBar({
   onToggleLayerVisible,
   onReorderTileLayers,
   onSetTileSize,
+  onFillLayer,
 }: {
   scene: Scene;
   tileAssets: Asset[];
-  paintMode: "off" | "paint" | "erase";
-  onPaintModeChange: (m: "off" | "paint" | "erase") => void;
+  paintMode: "off" | "paint" | "erase" | "fillrect";
+  onPaintModeChange: (m: "off" | "paint" | "erase" | "fillrect") => void;
   activeTileLayerId: string | null;
   onActiveTileLayerChange: (id: string | null) => void;
   onAddTileLayer: (tileAssetId?: string) => void;
@@ -4846,6 +4910,7 @@ function TilePaintBar({
   onToggleLayerVisible: (layerId: string) => void;
   onReorderTileLayers: (from: number, to: number) => void;
   onSetTileSize: (n: number) => void;
+  onFillLayer: (layerId: string) => void;
 }) {
   const tg = scene.tileGrid;
   const layers = tg?.layers || [];
@@ -4881,6 +4946,32 @@ function TilePaintBar({
           } disabled:opacity-40 disabled:cursor-not-allowed`}
         >
           🧽 Erase
+        </button>
+        <button
+          type="button"
+          onClick={() => onPaintModeChange(paintMode === "fillrect" ? "off" : "fillrect")}
+          disabled={!activeLayer || !activeLayer.tileAssetId}
+          title="Drag from corner to corner to fill a rectangle of cells"
+          className={`px-2 py-0.5 border ${
+            paintMode === "fillrect"
+              ? "border-farm-grass text-farm-grass bg-farm-grass/10"
+              : "border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass"
+          } disabled:opacity-40 disabled:cursor-not-allowed`}
+        >
+          ▣ Fill rect
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            if (!activeLayer) return;
+            if (!confirm(`Fill every cell on layer "${activeLayer.name}" with the active tile?`)) return;
+            onFillLayer(activeLayer.id);
+          }}
+          disabled={!activeLayer || !activeLayer.tileAssetId}
+          title="Paint every cell on the active layer with the current tile"
+          className="px-2 py-0.5 border border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          ⬛ Fill layer
         </button>
         <label className="flex items-center gap-1 ml-auto">
           Tile size:
