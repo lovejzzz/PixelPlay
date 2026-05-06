@@ -247,7 +247,7 @@ Pixel Play's creative-tool context.
 
 ### Self-improving prompts
 
-- [ ] **Prompt-augmentation memory** — when a generation hits a moderation
+- [x] **Prompt-augmentation memory** — when a generation hits a moderation
       block or returns an error 2× in a row for similar prompts, append a
       one-line note to the project's MEMORY blob: e.g. `"Avoid the phrase
       'X' for asset Y — moderation blocks it."` Implementation: track the

@@ -702,6 +702,52 @@ export default function Home() {
   // accumulate (handled inside `streakedFields`). Session-only.
   const forgeWindowRef = useRef<ForgeSample[]>([]);
 
+  // Sliding window of recent FAILED generations. Hermes-style self-
+  // improving prompt: when 3 entries share a prompt prefix, kick off
+  // /api/synthesize-note to summarize the failure pattern as a one-line
+  // bullet, then append it to the project MEMORY blob so subsequent
+  // prompts learn to avoid the trap.
+  const errorWindowRef = useRef<Array<{ prompt: string; error: string }>>([]);
+
+  /** Push an error and, if the last 3 entries share a 12+-char prompt
+   *  prefix (case-insensitive, trimmed), call the synthesize-note route
+   *  and append its bullet to the project's MEMORY blob. The errors are
+   *  cleared on success so the same trap doesn't fire repeatedly. */
+  async function recordGenerationError(prompt: string, error: string) {
+    const win = errorWindowRef.current;
+    win.push({ prompt: prompt.trim(), error: error.slice(0, 400) });
+    if (win.length > 10) win.shift();
+    if (win.length < 3) return;
+    const recent = win.slice(-3);
+    const prefix = sharedPrefix(
+      recent.map((e) => e.prompt.toLowerCase().trim())
+    );
+    if (prefix.length < 12) return;
+    // Drop the matched group so the next 3 errors can fire a new note.
+    errorWindowRef.current = win.slice(0, -3);
+    try {
+      const res = await fetch("/api/synthesize-note", {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({
+          errors: recent,
+          existingMemory: getEffectiveProjectMemory(),
+        }),
+      });
+      const data = (await res.json()) as { note?: string };
+      const note = data.note?.trim();
+      if (!note) return;
+      // Append the bullet to the project's memory, capped at the soft limit.
+      const cur = getEffectiveProjectMemory();
+      // Skip if already present (don't duplicate the same lesson).
+      if (cur.includes(note)) return;
+      const merged = cur ? `${cur}\n${note}` : note;
+      setProjectMemory(merged);
+    } catch {
+      /* network error — ignore, will retry on the next 3-strike */
+    }
+  }
+
   // Helper: build fetch headers including the user-supplied OpenAI key.
   function authHeaders(): Record<string, string> {
     const h: Record<string, string> = { "Content-Type": "application/json" };
@@ -1181,6 +1227,10 @@ export default function Home() {
         copy[copy.length - 1] = { role: "assistant", text: `Error: ${msg}`, error: true };
         return copy;
       });
+      // Self-improving prompt: if 3 similar prompts in a row failed,
+      // /api/synthesize-note synthesizes a "watch out" bullet and we
+      // append it to the project MEMORY so future prompts learn.
+      void recordGenerationError(prompt, msg);
     } finally {
       setBusy(false);
     }
@@ -1263,6 +1313,7 @@ export default function Home() {
         copy[copy.length - 1] = { role: "assistant", text: `Edit failed: ${msg}`, error: true };
         return copy;
       });
+      void recordGenerationError(trimmed, msg);
     } finally {
       setEditingBusy(false);
     }
@@ -7063,6 +7114,22 @@ function AssetCard({
 }
 
 // ----------------------------------------------------------- helpers
+
+/** Longest common case-sensitive prefix across an array of strings.
+ *  Used by the error-memory loop to detect that the user keeps trying
+ *  similar phrasings that are blocked. */
+function sharedPrefix(strs: string[]): string {
+  if (strs.length === 0) return "";
+  let i = 0;
+  const min = Math.min(...strs.map((s) => s.length));
+  while (
+    i < min &&
+    strs.every((s) => s.charCodeAt(i) === strs[0].charCodeAt(i))
+  ) {
+    i++;
+  }
+  return strs[0].slice(0, i);
+}
 
 function defaultSolid(t: AssetType): boolean {
   // Buildings, tiles-as-objects (rare), and creatures act as obstacles.
