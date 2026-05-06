@@ -220,7 +220,7 @@ Pixel Play's creative-tool context.
       every form field), `deleteRecipe(id)`. Bump `usageCount` on apply.
       Persist in same IndexedDB project record.
 
-- [ ] **Recipes tab — third right-tab** — add a "📋 Recipes" tab next
+- [x] **Recipes tab — third right-tab** — add a "📋 Recipes" tab next
       to `📦 Assets` and `🎬 Scenes` in the right panel. List rows
       sorted by `usageCount DESC, createdAt DESC`. Each row shows name,
       mode emoji, prompt preview (first 60 chars), `usageCount × times`,

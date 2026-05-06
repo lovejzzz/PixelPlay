@@ -222,7 +222,7 @@ type Recipe = {
  *  Agent's 2200-char limit on MEMORY.md. */
 const PROJECT_MEMORY_CAP = 2200;
 
-type RightTab = "assets" | "scenes";
+type RightTab = "assets" | "scenes" | "recipes";
 
 // ----------------------------------------------------------- constants
 
@@ -3052,7 +3052,22 @@ export default function Home() {
         <form onSubmit={handleSubmit} className="space-y-2 text-sm">
           {/* Asset type — three modes: Character / Item / Scene */}
           <div className="space-y-1">
-            <div className="text-[10px] uppercase tracking-wider opacity-50">Type</div>
+            <div className="flex items-center justify-between">
+              <div className="text-[10px] uppercase tracking-wider opacity-50">Type</div>
+              <button
+                type="button"
+                onClick={() => {
+                  const name = prompt("Recipe name:")?.trim();
+                  if (!name) return;
+                  saveRecipe(name);
+                  setRightTab("recipes");
+                }}
+                title="Save current form values as a one-click recipe — replays mode, prompt, perspective, pose, quality, variants, pixel-snap, and style override."
+                className="text-xs px-2 py-0.5 border border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass"
+              >
+                💾 Save as recipe
+              </button>
+            </div>
             <div className="flex flex-wrap gap-1">
               {GEN_MODES.map((m) => (
                 <button
@@ -3288,6 +3303,21 @@ export default function Home() {
             >
               🎬 Scenes {Object.keys(scenes).length > 0 && <span className="opacity-60 text-xs ml-1">({Object.keys(scenes).length})</span>}
             </button>
+            <button
+              type="button"
+              onClick={() => setRightTab("recipes")}
+              className={`px-3 py-1 border-2 font-pixel text-base ${
+                rightTab === "recipes"
+                  ? "border-farm-sky text-farm-sky bg-farm-sky/10"
+                  : "border-farm-wood/60 text-farm-parchment/70"
+              }`}
+            >
+              📋 Recipes {currentProject?.recipes && Object.keys(currentProject.recipes).length > 0 && (
+                <span className="opacity-60 text-xs ml-1">
+                  ({Object.keys(currentProject.recipes).length})
+                </span>
+              )}
+            </button>
           </div>
           {rightTab === "assets" && recent.length > 0 && (
             <div className="flex items-center gap-1">
@@ -3484,7 +3514,7 @@ export default function Home() {
               </button>
             )}
           </>
-        ) : (
+        ) : rightTab === "scenes" ? (
           <ScenesView
             scenes={scenes}
             assets={assets}
@@ -3649,6 +3679,12 @@ export default function Home() {
               setReplacePrompt("");
               await replaceSceneItem(activeScene.id, selectedSceneItem, p);
             }}
+          />
+        ) : (
+          <RecipesView
+            recipes={currentProject?.recipes || {}}
+            onApply={applyRecipe}
+            onDelete={deleteRecipe}
           />
         )}
       </section>
@@ -4269,6 +4305,82 @@ function CostIndicator({
       {project.cost > 0 && (
         <span className="opacity-70">/ project {formatDollars(project.cost)}</span>
       )}
+    </div>
+  );
+}
+
+function RecipesView({
+  recipes,
+  onApply,
+  onDelete,
+}: {
+  recipes: Record<string, Recipe>;
+  onApply: (id: string) => void;
+  onDelete: (id: string) => void;
+}) {
+  const list = Object.values(recipes).sort(
+    (a, b) => b.usageCount - a.usageCount || b.createdAt - a.createdAt
+  );
+  if (list.length === 0) {
+    return (
+      <div className="opacity-60 text-center py-12 text-sm">
+        <div className="text-6xl mb-3">📋</div>
+        <p>No recipes yet.</p>
+        <p className="text-xs mt-2 opacity-80">
+          Tweak the form, then click 💾 next to the Type buttons to save it
+          as a one-click recipe. Useful when you keep coming back to the
+          same prompt pattern.
+        </p>
+      </div>
+    );
+  }
+  const modeEmoji: Record<GenMode, string> = {
+    item: "🌽",
+    character: "🧑‍🌾",
+    scene: "🎬",
+  };
+  return (
+    <div className="space-y-2">
+      {list.map((r) => (
+        <div
+          key={r.id}
+          className="border-2 border-farm-wood/60 bg-farm-ink/30 p-2 space-y-1"
+        >
+          <div className="flex items-center gap-2">
+            <span className="text-lg leading-none">{modeEmoji[r.mode]}</span>
+            <span className="font-pixel text-sm text-farm-grass flex-1 truncate">
+              {r.name}
+            </span>
+            <span className="text-[10px] opacity-50 tabular-nums">
+              {r.usageCount}× used
+            </span>
+            <button
+              type="button"
+              onClick={() => onApply(r.id)}
+              title="Apply this recipe — fills the form with its values"
+              className="text-xs px-2 py-0.5 border border-farm-grass text-farm-grass bg-farm-grass/10 hover:bg-farm-grass/20"
+            >
+              Apply
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (confirm(`Delete recipe "${r.name}"?`)) onDelete(r.id);
+              }}
+              title="Delete recipe"
+              className="text-xs px-1.5 py-0.5 border border-farm-wood/60 hover:border-red-700 hover:text-red-300"
+            >
+              ✕
+            </button>
+          </div>
+          <div className="text-xs opacity-70 truncate" title={r.prompt}>
+            {r.prompt || <span className="opacity-50">(no prompt)</span>}
+          </div>
+          {r.description && (
+            <div className="text-[10px] opacity-50 italic">{r.description}</div>
+          )}
+        </div>
+      ))}
     </div>
   );
 }
