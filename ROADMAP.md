@@ -293,7 +293,7 @@ Make the project presentable and export-friendly for real game developers.
 
 ### Documentation & onboarding
 
-- [ ] **README overhaul** — rewrite README.md with feature list, environment
+- [x] **README overhaul** — rewrite README.md with feature list, environment
       variable reference (OPENAI_API_KEY, OPENAI_EMBED_MODEL, OPENAI_CHAT_MODEL),
       quick-start steps, and a "What's inside" section covering FORGE / Scene
       editor / Play mode / AI memory. No screenshots (can't generate); use
