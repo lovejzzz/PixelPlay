@@ -2451,6 +2451,7 @@ export default function Home() {
                 </button>
               </div>
               <CostIndicator session={session} project={projectLifetime} />
+              <StorageIndicator />
             </div>
           </div>
         </header>
@@ -3615,6 +3616,56 @@ function TrashModal({
       </div>
     </div>
   );
+}
+
+/** Tiny "💾 142 MB / 2 GB" line in the header. Polls `navigator.storage
+ *  .estimate()` every 30 s. Returns null silently if the browser doesn't
+ *  expose the API (older Safari) — better to hide than show ?? values. */
+function StorageIndicator() {
+  const [usage, setUsage] = useState<number | null>(null);
+  const [quota, setQuota] = useState<number | null>(null);
+  useEffect(() => {
+    if (typeof navigator === "undefined" || !navigator.storage?.estimate) return;
+    let cancelled = false;
+    async function fetchOnce() {
+      try {
+        const e = await navigator.storage.estimate();
+        if (cancelled) return;
+        setUsage(typeof e.usage === "number" ? e.usage : null);
+        setQuota(typeof e.quota === "number" ? e.quota : null);
+      } catch {
+        /* ignore — quota API can throw on some private-mode contexts */
+      }
+    }
+    fetchOnce();
+    const id = setInterval(fetchOnce, 30_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, []);
+  if (usage == null || quota == null || quota <= 0) return null;
+  const ratio = usage / quota;
+  const tone =
+    ratio > 0.95
+      ? "text-red-300"
+      : ratio > 0.8
+      ? "text-yellow-300"
+      : "opacity-60";
+  return (
+    <div
+      className={`text-[10px] font-mono ${tone}`}
+      title={`Browser storage: ${(usage / 1048576).toFixed(0)} MB used of ${(quota / 1073741824).toFixed(1)} GB available (${(ratio * 100).toFixed(1)}%)`}
+    >
+      💾 {formatStorageBytes(usage)} / {formatStorageBytes(quota)}
+    </div>
+  );
+}
+
+function formatStorageBytes(n: number): string {
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${Math.round(n / (1024 * 1024))} MB`;
+  return `${(n / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
 
 function CostIndicator({

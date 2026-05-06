@@ -119,7 +119,7 @@ to need editing, but the cron should still grep before changing.
       "Delete N", "Tag…", "Add to scene N". Don't change single-click
       behavior outside of select mode.
 
-- [ ] **Storage usage indicator in header** — call
+- [x] **Storage usage indicator in header** — call
       `navigator.storage.estimate()` on hydration, show a tiny
       "💾 142 MB / 2 GB" line in the header. Re-fetch every 30 s. If
       `usage / quota > 0.8`, color the line yellow; > 0.95, red.
