@@ -113,7 +113,7 @@ to need editing, but the cron should still grep before changing.
       so a character gets character-y suggestions and a tile gets
       tile-y suggestions.
 
-- [ ] **Bulk asset operations** — add a "Select" toggle in the gallery
+- [x] **Bulk asset operations** — add a "Select" toggle in the gallery
       header that turns on multi-select on AssetCards (add a checkbox
       in the corner). When 1+ are selected, show an action bar:
       "Delete N", "Tag…", "Add to scene N". Don't change single-click

@@ -370,6 +370,10 @@ export default function Home() {
   const [activeCharacterId, setActiveCharacterId] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [trashOpen, setTrashOpen] = useState(false);
+  /** Multi-select mode for the gallery. When ON, AssetCards show a corner
+   *  checkbox; when 1+ are selected, a bulk-action bar appears. */
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedAssetIds, setSelectedAssetIds] = useState<Set<string>>(new Set());
   const [openaiKey, setOpenaiKey] = useState("");
   /** When the user clicks FORGE without a key, we stash the prompt here
    *  and pop the Settings modal. After they save a key the effect below
@@ -2312,6 +2316,68 @@ export default function Home() {
     });
   }
 
+  // ------------- bulk-select operations on the gallery ------------------
+
+  function toggleAssetSelected(id: string) {
+    setSelectedAssetIds((cur) => {
+      const next = new Set(cur);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function bulkDeleteSelected() {
+    const ids = Array.from(selectedAssetIds);
+    if (ids.length === 0) return;
+    setAssets((a) => {
+      const now = Date.now();
+      const next = { ...a };
+      for (const id of ids) {
+        if (next[id]) next[id] = { ...next[id], trashedAt: now };
+      }
+      return next;
+    });
+    setSelectedAssetIds(new Set());
+    setSelectMode(false);
+  }
+
+  function bulkTagSelected() {
+    const ids = Array.from(selectedAssetIds);
+    if (ids.length === 0) return;
+    const raw = prompt(`Add tags to ${ids.length} asset${ids.length > 1 ? "s" : ""} (comma-separated):`);
+    if (!raw) return;
+    const newTags = raw.split(",").map((s) => s.trim()).filter(Boolean);
+    if (newTags.length === 0) return;
+    setAssets((a) => {
+      const next = { ...a };
+      for (const id of ids) {
+        if (!next[id]) continue;
+        const existing = next[id].tags || [];
+        const merged = [...new Set([...existing, ...newTags])];
+        next[id] = { ...next[id], tags: merged };
+      }
+      return next;
+    });
+  }
+
+  function bulkAddSelectedToScene() {
+    if (!activeScene) return;
+    const ids = Array.from(selectedAssetIds);
+    if (ids.length === 0) return;
+    const sceneId = activeScene.id;
+    const cx = activeScene.width / 2;
+    const cy = activeScene.height / 2;
+    ids.forEach((id, i) => {
+      // Fan around scene center so the items don't perfectly overlap.
+      const dx = (i - (ids.length - 1) / 2) * 60;
+      addAssetToScene(sceneId, id, cx + dx, cy);
+    });
+    setSelectedAssetIds(new Set());
+    setSelectMode(false);
+    setRightTab("scenes");
+  }
+
   /** Open the inline edit panel on a specific asset card. The actual edit
    *  call goes through editAssetInline once the user submits a prompt. */
   function startInlineEdit(asset: Asset) {
@@ -2692,12 +2758,30 @@ export default function Home() {
             </button>
           </div>
           {rightTab === "assets" && recent.length > 0 && (
-            <button
-              onClick={clearAll}
-              className="text-xs px-2 py-1 border border-farm-wood/60 hover:border-red-700 hover:text-red-300"
-            >
-              Clear all
-            </button>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => {
+                  setSelectMode((v) => {
+                    if (v) setSelectedAssetIds(new Set());
+                    return !v;
+                  });
+                }}
+                className={`text-xs px-2 py-1 border ${
+                  selectMode
+                    ? "border-farm-grass text-farm-grass bg-farm-grass/10"
+                    : "border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass"
+                }`}
+                title={selectMode ? "Exit multi-select" : "Multi-select assets"}
+              >
+                {selectMode ? "✓ Selecting" : "☐ Select"}
+              </button>
+              <button
+                onClick={clearAll}
+                className="text-xs px-2 py-1 border border-farm-wood/60 hover:border-red-700 hover:text-red-300"
+              >
+                Clear all
+              </button>
+            </div>
           )}
         </header>
 
@@ -2757,6 +2841,47 @@ export default function Home() {
                 )}
               </div>
             )}
+            {selectMode && selectedAssetIds.size > 0 && (
+              <div className="mb-3 flex flex-wrap items-center gap-2 px-3 py-2 border-2 border-farm-grass/60 bg-farm-grass/5 text-xs">
+                <span className="font-medium text-farm-grass">
+                  {selectedAssetIds.size} selected
+                </span>
+                <button
+                  type="button"
+                  onClick={bulkDeleteSelected}
+                  className="px-2 py-0.5 border border-farm-wood/60 hover:border-red-700 hover:text-red-300"
+                  title="Move selected assets to trash"
+                >
+                  🗑 Delete {selectedAssetIds.size}
+                </button>
+                <button
+                  type="button"
+                  onClick={bulkTagSelected}
+                  className="px-2 py-0.5 border border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass"
+                  title="Add comma-separated tags to all selected"
+                >
+                  🏷 Tag…
+                </button>
+                {activeScene && (
+                  <button
+                    type="button"
+                    onClick={bulkAddSelectedToScene}
+                    className="px-2 py-0.5 border border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass"
+                    title={`Drop selected onto 🎬 ${activeScene.name}`}
+                  >
+                    🎬 Add to scene {selectedAssetIds.size}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setSelectedAssetIds(new Set())}
+                  className="ml-auto px-2 py-0.5 opacity-60 hover:opacity-100"
+                  title="Deselect all"
+                >
+                  Clear selection
+                </button>
+              </div>
+            )}
             {recent.length === 0 ? (
               <div className="opacity-60 text-center py-12">
                 <div className="text-6xl mb-3">🌱</div>
@@ -2796,6 +2921,9 @@ export default function Home() {
                       setEditingAssetId(null);
                       setEditPrompt("");
                     }}
+                    selectMode={selectMode}
+                    selected={selectedAssetIds.has(a.id)}
+                    onToggleSelect={() => toggleAssetSelected(a.id)}
                   />
                 ))}
               </div>
@@ -5467,6 +5595,9 @@ function AssetCard({
   onChangeEditPrompt,
   onSubmitEdit,
   onCancelEdit,
+  selectMode,
+  selected,
+  onToggleSelect,
 }: {
   asset: Asset;
   onDownloadPNG: () => void;
@@ -5491,6 +5622,10 @@ function AssetCard({
   onChangeEditPrompt: (s: string) => void;
   onSubmitEdit: () => void;
   onCancelEdit: () => void;
+  /** When true, render a corner checkbox and let clicks toggle selection. */
+  selectMode: boolean;
+  selected: boolean;
+  onToggleSelect: () => void;
 }) {
   const [w, h] = parseSize(asset.sourceSize);
   const aspect = `${w} / ${h}`;
@@ -5556,15 +5691,49 @@ function AssetCard({
 
   return (
     <div
-      className="group bg-farm-ink/60 border-2 border-farm-wood p-2 flex flex-col gap-2 relative"
-      draggable
+      className={`group bg-farm-ink/60 border-2 p-2 flex flex-col gap-2 relative ${
+        selectMode && selected
+          ? "border-farm-grass ring-2 ring-farm-grass/40"
+          : "border-farm-wood"
+      } ${selectMode ? "cursor-pointer" : ""}`}
+      draggable={!selectMode}
+      onClick={(e) => {
+        // In select mode, the card itself toggles selection — but ignore
+        // clicks that originated on inner buttons / inputs / textarea so the
+        // existing actions (✏️, 🎨, rename, etc.) still work.
+        if (!selectMode) return;
+        const t = e.target as HTMLElement;
+        if (t.closest("button, input, textarea, select, a")) return;
+        onToggleSelect();
+      }}
       onDragStart={(e) => {
+        if (selectMode) {
+          e.preventDefault();
+          return;
+        }
         e.dataTransfer.setData("application/x-pwf-asset-id", asset.id);
         e.dataTransfer.effectAllowed = "copy";
         onDragStart();
       }}
       onDragEnd={onDragEnd}
     >
+      {selectMode && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleSelect();
+          }}
+          title={selected ? "Deselect" : "Select"}
+          className={`absolute top-1 left-1 z-10 w-6 h-6 flex items-center justify-center text-sm border ${
+            selected
+              ? "bg-farm-grass text-farm-ink border-farm-grass"
+              : "bg-farm-ink/80 border-farm-wood/60 hover:border-farm-grass"
+          }`}
+        >
+          {selected ? "✓" : ""}
+        </button>
+      )}
       <button
         onClick={onDelete}
         title="Delete"
