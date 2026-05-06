@@ -187,8 +187,17 @@ type Project = {
   assets: Record<string, Asset>;
   scenes: Record<string, Scene>;
   prefabs?: Record<string, Prefab>;
+  /** Per-project markdown blob — naming conventions, palette, recurring
+   *  characters, things learned. Soft-cap ~2200 chars. Frozen-into-prompt
+   *  pattern: appended to every generation's system message so the model
+   *  learns the project's quirks. Modeled after Hermes Agent's MEMORY.md. */
+  memory?: string;
   createdAt: number;
 };
+
+/** Soft cap for the project MEMORY blob, in chars. Inspired by Hermes
+ *  Agent's 2200-char limit on MEMORY.md. */
+const PROJECT_MEMORY_CAP = 2200;
 
 type RightTab = "assets" | "scenes";
 
@@ -434,6 +443,31 @@ export default function Home() {
       if (!cur) return p;
       return { ...p, [currentId]: { ...cur, style: updater(cur.style) } };
     });
+  }
+
+  /** Write the project MEMORY blob. Trims to PROJECT_MEMORY_CAP chars
+   *  (soft cap — preserves whatever fits and drops the rest). UI items
+   *  in Phase 7 surface this via a textarea + auto-augmentation hooks. */
+  function setProjectMemory(memory: string) {
+    const trimmed = memory.length > PROJECT_MEMORY_CAP
+      ? memory.slice(0, PROJECT_MEMORY_CAP)
+      : memory;
+    setProjects((p) => {
+      const cur = p[currentId];
+      if (!cur) return p;
+      return { ...p, [currentId]: { ...cur, memory: trimmed || undefined } };
+    });
+  }
+
+  /** Read the effective project memory. Migration shim: if the new
+   *  `memory` field is undefined on legacy projects, fall back to the
+   *  existing `style.text` blob as a seed. UI editors should copy the
+   *  fallback into `memory` on first edit so the migration completes. */
+  function getEffectiveProjectMemory(): string {
+    const cur = projects[currentId];
+    if (!cur) return "";
+    if (typeof cur.memory === "string") return cur.memory;
+    return cur.style?.text || "";
   }
 
   function setScenes(updater: (s: Record<string, Scene>) => Record<string, Scene>) {

@@ -69,6 +69,8 @@ PHASE 6 COMPLETE — 17/17 done. Cron will exit early on subsequent fires.
 
 2026-05-06 fire #30 — PHASE 6 COMPLETE — nothing to do.
 
+2026-05-06 fire #31 — Project MEMORY blob — data layer: extended `Project` type in `app/page.tsx` with optional `memory?: string`. New `PROJECT_MEMORY_CAP = 2200` constant (mirrors Hermes Agent). Added two helpers: `setProjectMemory(memory)` mutator (trims to cap, stores undefined when blank) and `getEffectiveProjectMemory()` read shim that falls back to `style.text` when the new field is undefined — covers legacy projects without breaking. Pure plumbing — no UI yet, that's the next item. Build clean. Next: Project MEMORY UI — sidebar editor.
+
 ## 2026-05-06 — Phase 7 begins (AI-native polish)
 
 User asked for Hermes-Agent-inspired upgrades. Studied

@@ -187,7 +187,7 @@ Pixel Play's creative-tool context.
 
 ### Foundation — Project Memory
 
-- [ ] **Project MEMORY blob — data layer** — add a `Project.memory?:
+- [x] **Project MEMORY blob — data layer** — add a `Project.memory?:
       string` field (markdown text, soft-cap ~2200 chars). Persists with
       the rest of the project state in IndexedDB. Add a `setProjectMemory(
       currentId: string, memory: string)` mutator. Don't surface in UI yet
