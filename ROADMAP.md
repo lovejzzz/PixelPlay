@@ -299,7 +299,7 @@ Make the project presentable and export-friendly for real game developers.
       editor / Play mode / AI memory. No screenshots (can't generate); use
       ASCII art or text diagrams for structure.
 
-- [ ] **First-visit onboarding modal** — detect a `"onboarded"` localStorage
+- [x] **First-visit onboarding modal** — detect a `"onboarded"` localStorage
       flag on mount. If absent, show a 4-step modal: (1) FORGE to create assets,
       (2) drag to Scene, (3) Play mode walkthrough, (4) Settings for API key.
       Each step has a title + 2-sentence body + Next button; final step has a

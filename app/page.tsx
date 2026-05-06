@@ -437,6 +437,7 @@ export default function Home() {
   const [activeCharacterId, setActiveCharacterId] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [trashOpen, setTrashOpen] = useState(false);
+  const [onboardingOpen, setOnboardingOpen] = useState(false);
   /** Multi-select mode for the gallery. When ON, AssetCards show a corner
    *  checkbox; when 1+ are selected, a bulk-action bar appears. */
   const [selectMode, setSelectMode] = useState(false);
@@ -690,6 +691,7 @@ export default function Home() {
   const HISTORY_KEY = "pwf:prompt-history:v1";
   const MAX_HISTORY = 30;
   const OPENAI_KEY_LS = "pixelplay:openai-key:v1";
+  const ONBOARDED_LS_KEY = "pixelplay:onboarded:v1";
   useEffect(() => {
     try {
       const raw = localStorage.getItem(HISTORY_KEY);
@@ -699,6 +701,8 @@ export default function Home() {
       }
       const k = localStorage.getItem(OPENAI_KEY_LS);
       if (k) setOpenaiKey(k);
+      // Show onboarding modal on first visit.
+      if (!localStorage.getItem(ONBOARDED_LS_KEY)) setOnboardingOpen(true);
       // Cross-session user profile (Hermes USER.md analog) — seed form
       // defaults so a returning user starts where they left off.
       const profile = readUserProfile();
@@ -4097,6 +4101,15 @@ export default function Home() {
           }}
         />
       )}
+
+      {onboardingOpen && (
+        <OnboardingModal
+          onClose={() => {
+            try { localStorage.setItem(ONBOARDED_LS_KEY, "1"); } catch {}
+            setOnboardingOpen(false);
+          }}
+        />
+      )}
     </main>
   );
 }
@@ -4594,6 +4607,84 @@ function TrashModal({
             </button>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+const ONBOARDING_STEPS = [
+  {
+    title: "1 — Forge assets with AI",
+    body: "Type a description in the FORGE panel on the left and hit Enter. Pixel Play calls your OpenAI key and returns pixel-art sprites — characters, tiles, scenes, and more.",
+  },
+  {
+    title: "2 — Drag assets into a scene",
+    body: "Switch to the Scenes tab on the right and drag any asset card onto the canvas. Resize, rotate, and layer items to build your game world.",
+  },
+  {
+    title: "3 — Play mode",
+    body: "Press the ▶ Play button to enter Play mode. Use WASD or arrow keys to walk your character around, interact with NPCs, pick up items, and step through portals.",
+  },
+  {
+    title: "4 — Add your OpenAI key",
+    body: "Click ⚙ Settings in the top-right corner and paste your OpenAI API key. Keys are stored only in your browser — never sent anywhere except api.openai.com.",
+  },
+] as const;
+
+function OnboardingModal({ onClose }: { onClose: () => void }) {
+  const [step, setStep] = useState(0);
+  const isLast = step === ONBOARDING_STEPS.length - 1;
+  const { title, body } = ONBOARDING_STEPS[step];
+  return (
+    <div
+      className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4"
+      onClick={onClose}
+    >
+      <div
+        className="bg-farm-ink border-2 border-farm-wood w-full max-w-md p-6 space-y-5"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start justify-between">
+          <h2 className="font-pixel text-lg text-farm-grass leading-snug">Welcome to Pixel Play</h2>
+          <button
+            onClick={onClose}
+            className="text-farm-parchment/70 hover:text-farm-parchment text-xl leading-none px-2 ml-2 shrink-0"
+            title="Dismiss"
+          >
+            ×
+          </button>
+        </div>
+
+        <div className="space-y-2">
+          <p className="text-sm font-semibold text-farm-parchment">{title}</p>
+          <p className="text-sm opacity-80 leading-relaxed">{body}</p>
+        </div>
+
+        <div className="flex items-center justify-between pt-2">
+          <div className="flex gap-1">
+            {ONBOARDING_STEPS.map((_, i) => (
+              <span
+                key={i}
+                className={`inline-block w-2 h-2 rounded-full ${i === step ? "bg-farm-grass" : "bg-farm-wood"}`}
+              />
+            ))}
+          </div>
+          {isLast ? (
+            <button
+              onClick={onClose}
+              className="px-4 py-1.5 text-sm border border-farm-grass text-farm-grass hover:bg-farm-grass/20 font-pixel"
+            >
+              Get started
+            </button>
+          ) : (
+            <button
+              onClick={() => setStep((s) => s + 1)}
+              className="px-4 py-1.5 text-sm border border-farm-wood text-farm-parchment hover:border-farm-grass hover:text-farm-grass"
+            >
+              Next →
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );
