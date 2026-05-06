@@ -702,6 +702,19 @@ export default function Home() {
   // accumulate (handled inside `streakedFields`). Session-only.
   const forgeWindowRef = useRef<ForgeSample[]>([]);
 
+  // Separate sliding window for recipe-suggestion detection: tracks the
+  // last 10 successful FORGEs (mode + prompt), looks for 3+ same-mode
+  // submissions with ≥60% prompt-token overlap, and pops a dismissible
+  // "🪄 Save this pattern as a recipe?" toast.
+  const forgeHistoryRef = useRef<Array<{ mode: GenMode; prompt: string; ts: number }>>([]);
+  const [recipeSuggestion, setRecipeSuggestion] = useState<{
+    mode: GenMode;
+    prompt: string;
+  } | null>(null);
+  // Prompt-prefixes the user has explicitly dismissed; suppresses the
+  // toast for the same pattern this session.
+  const dismissedSuggestionsRef = useRef<Set<string>>(new Set());
+
   // Sliding window of recent FAILED generations. Hermes-style self-
   // improving prompt: when 3 entries share a prompt prefix, kick off
   // /api/synthesize-note to summarize the failure pattern as a one-line
@@ -1219,6 +1232,21 @@ export default function Home() {
       const promote = streakedFields(forgeWindowRef.current);
       if (Object.keys(promote).length > 0) {
         patchUserProfile(promote);
+      }
+
+      // Recipe-suggestion detector — push to history, look for a 3+
+      // same-mode pattern with ≥60% prompt-token overlap, surface as a
+      // dismissible toast.
+      forgeHistoryRef.current = [
+        ...forgeHistoryRef.current.slice(-9),
+        { mode: genMode, prompt, ts: Date.now() },
+      ];
+      const pattern = detectRecipePattern(forgeHistoryRef.current);
+      if (pattern) {
+        const dismissKey = `${pattern.mode}:${pattern.prompt.slice(0, 30).toLowerCase()}`;
+        if (!dismissedSuggestionsRef.current.has(dismissKey)) {
+          setRecipeSuggestion(pattern);
+        }
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Unknown error";
@@ -3143,6 +3171,51 @@ export default function Home() {
               className="px-3 py-1.5 text-sm border border-yellow-300 bg-yellow-300/10 text-yellow-200 hover:bg-yellow-300/20"
             >
               Set key
+            </button>
+          </div>
+        )}
+
+        {/* Recipe-suggestion toast — auto-detected after 3+ same-mode
+            FORGEs with ≥60% prompt-token overlap. Click Save → prompts
+            for a name, snapshots the current form, switches to recipes
+            tab. ✕ dismisses for this session. */}
+        {recipeSuggestion && (
+          <div className="mb-3 flex items-center gap-2 px-3 py-2 border-2 border-farm-grass/60 bg-farm-grass/10 text-xs">
+            <span className="text-lg leading-none">🪄</span>
+            <div className="flex-1 min-w-0">
+              <div className="text-farm-grass font-medium">
+                Save this pattern as a recipe?
+              </div>
+              <div className="opacity-70 italic truncate">
+                {recipeSuggestion.prompt.slice(0, 80)}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                const name = prompt("Recipe name:")?.trim();
+                if (!name) return;
+                saveRecipe(name);
+                setRightTab("recipes");
+                setRecipeSuggestion(null);
+              }}
+              className="px-2 py-0.5 border border-farm-grass text-farm-grass bg-farm-grass/20 hover:bg-farm-grass/30"
+            >
+              Save
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (recipeSuggestion) {
+                  const key = `${recipeSuggestion.mode}:${recipeSuggestion.prompt.slice(0, 30).toLowerCase()}`;
+                  dismissedSuggestionsRef.current.add(key);
+                }
+                setRecipeSuggestion(null);
+              }}
+              title="Dismiss for this session"
+              className="px-1.5 py-0.5 opacity-60 hover:opacity-100"
+            >
+              ✕
             </button>
           </div>
         )}
@@ -7114,6 +7187,61 @@ function AssetCard({
 }
 
 // ----------------------------------------------------------- helpers
+
+/** Whitespace-token set for Jaccard-overlap comparison. Drops 1- and
+ *  2-char tokens (articles, prepositions) since they don't carry pattern
+ *  signal — "a", "of", "to", etc. */
+function promptTokens(s: string): Set<string> {
+  return new Set(
+    s
+      .toLowerCase()
+      .split(/[\s.,;:!?()'"]+/)
+      .filter((t) => t.length >= 3)
+  );
+}
+
+function jaccardSim(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 && b.size === 0) return 1;
+  let inter = 0;
+  for (const t of a) if (b.has(t)) inter++;
+  const union = a.size + b.size - inter;
+  return union > 0 ? inter / union : 0;
+}
+
+/** Find a recurring pattern in the FORGE history: 3+ same-mode entries
+ *  whose pairwise prompt-token Jaccard averages ≥ 0.6. Returns the most
+ *  recent matching entry, or null. The user-facing toast asks if this
+ *  should be saved as a one-click recipe. */
+function detectRecipePattern(
+  history: Array<{ mode: GenMode; prompt: string; ts: number }>
+): { mode: GenMode; prompt: string } | null {
+  if (history.length < 3) return null;
+  const recent = history.slice(-10);
+  const byMode = new Map<GenMode, typeof recent>();
+  for (const e of recent) {
+    const arr = byMode.get(e.mode) || [];
+    arr.push(e);
+    byMode.set(e.mode, arr);
+  }
+  for (const [, entries] of byMode) {
+    if (entries.length < 3) continue;
+    const last3 = entries.slice(-3);
+    const tokSets = last3.map((e) => promptTokens(e.prompt));
+    let total = 0;
+    let pairs = 0;
+    for (let i = 0; i < tokSets.length; i++) {
+      for (let j = i + 1; j < tokSets.length; j++) {
+        total += jaccardSim(tokSets[i], tokSets[j]);
+        pairs++;
+      }
+    }
+    if (pairs > 0 && total / pairs >= 0.6) {
+      const last = last3[last3.length - 1];
+      return { mode: last.mode, prompt: last.prompt };
+    }
+  }
+  return null;
+}
 
 /** Longest common case-sensitive prefix across an array of strings.
  *  Used by the error-memory loop to detect that the user keeps trying

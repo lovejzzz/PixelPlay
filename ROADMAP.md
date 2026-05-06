@@ -258,7 +258,7 @@ Pixel Play's creative-tool context.
 
 ### Auto-curation
 
-- [ ] **"Save as recipe?" toast after similar repeat FORGEs** — track the
+- [x] **"Save as recipe?" toast after similar repeat FORGEs** — track the
       last 10 successful generations in session-only state. When 3+ have
       the same `genMode` and ≥60% prompt-token overlap, surface a small
       toast in the chat panel: `🪄 Save this pattern as a recipe?` with a
