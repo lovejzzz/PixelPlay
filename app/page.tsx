@@ -374,6 +374,7 @@ export default function Home() {
    *  checkbox; when 1+ are selected, a bulk-action bar appears. */
   const [selectMode, setSelectMode] = useState(false);
   const [selectedAssetIds, setSelectedAssetIds] = useState<Set<string>>(new Set());
+  const [assetSort, setAssetSort] = useState<"newest" | "oldest" | "name" | "type">("newest");
   const [openaiKey, setOpenaiKey] = useState("");
   /** When the user clicks FORGE without a key, we stash the prompt here
    *  and pop the Settings modal. After they save a key the effect below
@@ -2417,7 +2418,27 @@ export default function Home() {
     }
     return true;
   });
-  const recent = filteredAssets.sort((a, b) => b.createdAt - a.createdAt);
+  const recent = (() => {
+    // Don't mutate filteredAssets in place; sort returns the same ref otherwise.
+    const arr = [...filteredAssets];
+    switch (assetSort) {
+      case "oldest":
+        return arr.sort((a, b) => a.createdAt - b.createdAt);
+      case "name":
+        return arr.sort((a, b) =>
+          (a.name || a.prompt).localeCompare(b.name || b.prompt)
+        );
+      case "type":
+        // Group by assetType A-Z, then newest within each group.
+        return arr.sort((a, b) => {
+          if (a.assetType !== b.assetType) return a.assetType.localeCompare(b.assetType);
+          return b.createdAt - a.createdAt;
+        });
+      case "newest":
+      default:
+        return arr.sort((a, b) => b.createdAt - a.createdAt);
+    }
+  })();
   const hasStyleConfig =
     projectStyle.text !== "" || projectStyle.refUrl !== null || projectStyle.preset !== "cozy";
 
@@ -2798,6 +2819,19 @@ export default function Home() {
                     placeholder="🔍 Search by name, prompt, tag, type…"
                     className="flex-1 bg-farm-ink/60 border border-farm-wood text-farm-parchment px-2 py-1 text-sm focus:outline-none focus:border-farm-grass"
                   />
+                  <select
+                    value={assetSort}
+                    onChange={(e) =>
+                      setAssetSort(e.target.value as "newest" | "oldest" | "name" | "type")
+                    }
+                    className="bg-farm-ink/60 border border-farm-wood text-farm-parchment text-xs px-1 py-1 focus:outline-none focus:border-farm-grass"
+                    title="Sort assets"
+                  >
+                    <option value="newest">Newest</option>
+                    <option value="oldest">Oldest</option>
+                    <option value="name">Name A-Z</option>
+                    <option value="type">Type</option>
+                  </select>
                   {(search || activeTags.length > 0) && (
                     <button
                       onClick={() => {

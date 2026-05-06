@@ -124,7 +124,7 @@ to need editing, but the cron should still grep before changing.
       "💾 142 MB / 2 GB" line in the header. Re-fetch every 30 s. If
       `usage / quota > 0.8`, color the line yellow; > 0.95, red.
 
-- [ ] **Asset gallery sort options** — small dropdown next to the search
+- [x] **Asset gallery sort options** — small dropdown next to the search
       box: "Newest" (default), "Oldest", "Name A-Z", "Type". Sort
       `recent[]` accordingly before rendering.
 
