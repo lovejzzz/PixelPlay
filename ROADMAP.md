@@ -408,7 +408,7 @@ Let users share projects via a link and (optionally) co-edit in real time.
       in-browser, POSTs it to `/api/share`, then copies the returned URL
       to clipboard and shows a toast "Link copied!".
 
-- [ ] **Project share link — import** — on page load, detect
+- [x] **Project share link — import** — on page load, detect
       `?import=<id>` in `window.location.search`. If present, fetch the
       blob URL via `/api/share?id=<id>` (GET returns a redirect to the
       blob), pipe through the existing `importProject(file)` flow, and

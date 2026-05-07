@@ -457,6 +457,10 @@ export default function Home() {
   const [trashOpen, setTrashOpen] = useState(false);
   const [onboardingOpen, setOnboardingOpen] = useState(false);
   const [shareToast, setShareToast] = useState<string | null>(null);
+  /** True while a `?import=<id>` URL is being fetched + piped through
+   *  importProject. Surfaces a spinner in the header so users know the
+   *  app didn't just hang on first paint. */
+  const [importingShared, setImportingShared] = useState(false);
   /** Multi-select mode for the gallery. When ON, AssetCards show a corner
    *  checkbox; when 1+ are selected, a bulk-action bar appears. */
   const [selectMode, setSelectMode] = useState(false);
@@ -1442,6 +1446,43 @@ export default function Home() {
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [messages]);
+
+  // Detect `?import=<id>` once after hydration and pipe the shared zip
+  // through importProject. Clears the query param afterwards so a refresh
+  // doesn't re-import. Ref-guarded so it only fires once per page load
+  // even if the effect would otherwise re-run on hydrated→true transitions.
+  const importedSharedRef = useRef(false);
+  useEffect(() => {
+    if (!hydrated || importedSharedRef.current) return;
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const id = params.get("import");
+    if (!id) return;
+    importedSharedRef.current = true;
+    (async () => {
+      setImportingShared(true);
+      try {
+        const res = await fetch(`/api/share?id=${encodeURIComponent(id)}`);
+        if (!res.ok) {
+          alert(`Couldn't load shared project (HTTP ${res.status}).`);
+          return;
+        }
+        const blob = await res.blob();
+        const file = new File([blob], `${id}.zip`, { type: "application/zip" });
+        await importProject(file);
+      } catch (err) {
+        alert(`Couldn't import shared project: ${err instanceof Error ? err.message : String(err)}`);
+      } finally {
+        setImportingShared(false);
+        // Clear the query param so a refresh doesn't re-trigger the import.
+        try {
+          const url = new URL(window.location.href);
+          url.searchParams.delete("import");
+          window.history.replaceState({}, "", url.toString());
+        } catch {}
+      }
+    })();
+  }, [hydrated]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!agentOpen) return;
@@ -3926,6 +3967,12 @@ export default function Home() {
               </div>
               <CostIndicator session={session} project={projectLifetime} />
               <StorageIndicator />
+              {importingShared && (
+                <div className="text-xs text-farm-grass flex items-center gap-1.5">
+                  <span className="inline-block w-3 h-3 border-2 border-farm-grass border-t-transparent rounded-full animate-spin" />
+                  Importing shared project…
+                </div>
+              )}
             </div>
           </div>
         </header>
