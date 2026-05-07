@@ -795,6 +795,23 @@ export default function Home() {
     return h;
   }
 
+  /** Pick the image-gen endpoint + headers based on the user's provider
+   *  preference. Scene mode (`splitItems`) always routes to OpenAI since
+   *  FAL has no scene parser; everything else honours the selector. */
+  function imageGenRoute(opts: { splitItems?: boolean }): {
+    url: string;
+    headers: Record<string, string>;
+    isFal: boolean;
+  } {
+    const useFal = imageProvider === "fal" && !opts.splitItems;
+    if (useFal) {
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (falKey.trim()) headers["x-fal-key"] = falKey.trim();
+      return { url: "/api/generate-fal", headers, isFal: true };
+    }
+    return { url: "/api/generate", headers: authHeaders(), isFal: false };
+  }
+
   /** Fire-and-forget embedding pass for newly-created assets. Looks up
    *  each id at call time, builds a `name + prompt + tags` text, sends
    *  one batched embed request, then writes each vector back to its
@@ -1134,15 +1151,17 @@ export default function Home() {
     if (currentId) setProjectLifetime(getProjectCost(currentId));
   }, [hydrated, currentId]);
 
-  // Replay a pending submit once the user saves a key in Settings.
+  // Replay a pending submit once the user saves a key in Settings. Either
+  // key can unblock — handleSubmit re-checks against the active provider.
   useEffect(() => {
-    if (!pendingSubmitPrompt || !openaiKey.trim() || busy) return;
+    if (!pendingSubmitPrompt || busy) return;
+    if (!openaiKey.trim() && !falKey.trim()) return;
     const prompt = pendingSubmitPrompt;
     setPendingSubmitPrompt(null);
     void handleSubmit(null, prompt);
     // handleSubmit is a stable closure over the latest state in this render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pendingSubmitPrompt, openaiKey, busy]);
+  }, [pendingSubmitPrompt, openaiKey, falKey, busy]);
 
   // ------------- handlers -------------
 
@@ -1151,10 +1170,17 @@ export default function Home() {
     const prompt = (promptOverride ?? input).trim();
     if (!prompt || busy) return;
 
+    const isCharacter = genMode === "character";
+    const effectivePose = isCharacter ? pose : "single";
+    const isScene = genMode === "scene";
+
     // No key yet → stash the prompt and pop Settings instead of letting
     // the request fail with a 401. The effect below replays once the key
-    // is saved.
-    if (!openaiKey.trim()) {
+    // is saved. Scene mode always needs the OpenAI key (FAL has no parser);
+    // otherwise we ask for whichever key the active provider needs.
+    const useFal = imageProvider === "fal" && !isScene;
+    const requiredKey = useFal ? falKey : openaiKey;
+    if (!requiredKey.trim()) {
       setPendingSubmitPrompt(prompt);
       setSettingsOpen(true);
       return;
@@ -1163,9 +1189,6 @@ export default function Home() {
     setBusy(true);
     pushPromptHistory(prompt);
     setInput("");
-    const isCharacter = genMode === "character";
-    const effectivePose = isCharacter ? pose : "single";
-    const isScene = genMode === "scene";
 
     // Internal Asset.assetType: characters get "character" so existing
     // character-aware code (ensurePlayerCharacter, scene player, walk-cycle
@@ -1185,22 +1208,29 @@ export default function Home() {
     if (projectStyle.refUrl) referenceUrls.push(projectStyle.refUrl);
 
     try {
-      const res = await fetch("/api/generate", {
+      // FAL Schnell only handles plain prompt + size + variants — drop the
+      // perspective/pose/style framing the OpenAI route uses to enrich
+      // prompts. Scene mode (`splitItems`) always routes through OpenAI.
+      const route = imageGenRoute({ splitItems: isScene });
+      const reqBody = route.isFal
+        ? { prompt, quality, variants }
+        : {
+            prompt,
+            assetType: newAssetType,
+            perspective,
+            pose: effectivePose,
+            quality,
+            variants,
+            referenceUrls,
+            projectStyle: projectStyle.text || undefined,
+            stylePreset: projectStyle.preset,
+            splitItems: isScene,
+            projectMemory: getEffectiveProjectMemory() || undefined,
+          };
+      const res = await fetch(route.url, {
         method: "POST",
-        headers: authHeaders(),
-        body: JSON.stringify({
-          prompt,
-          assetType: newAssetType,
-          perspective,
-          pose: effectivePose,
-          quality,
-          variants,
-          referenceUrls,
-          projectStyle: projectStyle.text || undefined,
-          stylePreset: projectStyle.preset,
-          splitItems: isScene,
-          projectMemory: getEffectiveProjectMemory() || undefined,
-        }),
+        headers: route.headers,
+        body: JSON.stringify(reqBody),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
@@ -1273,7 +1303,8 @@ export default function Home() {
         }
       }
 
-      // Cost tracking.
+      // Cost tracking. FAL responses carry an authoritative `cost` field;
+      // OpenAI responses don't, so we estimate from the price table.
       const sourceSizeForCost = (data.size || "1024x1024") as
         | "1024x1024"
         | "1024x1536"
@@ -1287,6 +1318,9 @@ export default function Home() {
           spend += estimateImageCost(quality, "1024x1024", 1);
           calls += 1;
         }
+      } else if (route.isFal) {
+        spend += typeof data.cost === "number" ? data.cost : 0;
+        calls += 1;
       } else {
         spend += estimateImageCost(quality, sourceSizeForCost, newIds.length);
         calls += 1;
@@ -1408,21 +1442,27 @@ export default function Home() {
     const referenceUrls = [asset.rawUrl];
     if (projectStyle.refUrl) referenceUrls.push(projectStyle.refUrl);
     try {
-      const res = await fetch("/api/generate", {
+      // FAL Schnell can't accept reference images, so an FAL-routed edit
+      // is effectively a fresh single-image gen from the edit prompt.
+      const route = imageGenRoute({});
+      const reqBody = route.isFal
+        ? { prompt: trimmed, quality, variants: 1 }
+        : {
+            prompt: trimmed,
+            assetType: asset.assetType,
+            perspective: asset.perspective,
+            pose: "single" as const,
+            quality,
+            variants: 1,
+            referenceUrls,
+            projectStyle: projectStyle.text || undefined,
+            stylePreset: projectStyle.preset,
+            projectMemory: getEffectiveProjectMemory() || undefined,
+          };
+      const res = await fetch(route.url, {
         method: "POST",
-        headers: authHeaders(),
-        body: JSON.stringify({
-          prompt: trimmed,
-          assetType: asset.assetType,
-          perspective: asset.perspective,
-          pose: "single",
-          quality,
-          variants: 1,
-          referenceUrls,
-          projectStyle: projectStyle.text || undefined,
-          stylePreset: projectStyle.preset,
-          projectMemory: getEffectiveProjectMemory() || undefined,
-        }),
+        headers: route.headers,
+        body: JSON.stringify(reqBody),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
@@ -1451,7 +1491,10 @@ export default function Home() {
       };
       setAssets((a) => ({ ...a, [id]: newAsset }));
       void embedAssets([id]);
-      const rec = recordSpend(currentId, estimateImageCost(quality, "1024x1024", 1), 1, quality as "low" | "medium" | "high");
+      const editSpend = route.isFal
+        ? (typeof data.cost === "number" ? data.cost : 0)
+        : estimateImageCost(quality, "1024x1024", 1);
+      const rec = recordSpend(currentId, editSpend, 1, quality as "low" | "medium" | "high");
       setSessionState(rec.session);
       setProjectLifetime(rec.project);
       setMessages((m) => {

@@ -347,7 +347,7 @@ gpt-image-1 (~$0.04/image). FAL.ai's Flux Schnell runs at ~$0.003/image.
       get the same 👁 toggle + "Test" button pattern as the existing OpenAI
       key field.
 
-- [ ] **Client dispatcher** — in `app/page.tsx`, `handleSubmit` and
+- [x] **Client dispatcher** — in `app/page.tsx`, `handleSubmit` and
       `editAssetInline` read `imageProvider` from prefs and POST to either
       `/api/generate` or `/api/generate-fal` accordingly. Pass the FAL key
       via `x-fal-key` header (same as `x-openai-key` pattern). FAL route
