@@ -339,7 +339,7 @@ gpt-image-1 (~$0.04/image). FAL.ai's Flux Schnell runs at ~$0.003/image.
       cost: number}` in the same shape the client expects. No image editing
       or sprite-sheet support in v1 — single images only.
 
-- [ ] **Provider selector in Settings** — add an `imageProvider:
+- [x] **Provider selector in Settings** — add an `imageProvider:
       "openai" | "fal"` field to localStorage prefs (default `"openai"`).
       SettingsModal gains a "Image model" radio group: "OpenAI gpt-image-1"
       and "FAL Flux Schnell (fast/cheap)". Showing FAL reveals a second API

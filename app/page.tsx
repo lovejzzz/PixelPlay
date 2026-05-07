@@ -444,6 +444,12 @@ export default function Home() {
   const [selectedAssetIds, setSelectedAssetIds] = useState<Set<string>>(new Set());
   const [assetSort, setAssetSort] = useState<"newest" | "oldest" | "name" | "type">("newest");
   const [openaiKey, setOpenaiKey] = useState("");
+  /** Image generation provider selector. "openai" routes FORGE through
+   *  `/api/generate` (gpt-image-1, ~$0.04/image); "fal" routes through
+   *  `/api/generate-fal` (Flux Schnell, ~$0.003/image). The wired-up
+   *  dispatcher lands in a follow-up roadmap item. */
+  const [imageProvider, setImageProvider] = useState<"openai" | "fal">("openai");
+  const [falKey, setFalKey] = useState("");
   /** When the user clicks FORGE without a key, we stash the prompt here
    *  and pop the Settings modal. After they save a key the effect below
    *  replays the submit with the stashed prompt. */
@@ -691,6 +697,8 @@ export default function Home() {
   const HISTORY_KEY = "pwf:prompt-history:v1";
   const MAX_HISTORY = 30;
   const OPENAI_KEY_LS = "pixelplay:openai-key:v1";
+  const FAL_KEY_LS = "pixelplay:fal-key:v1";
+  const IMAGE_PROVIDER_LS = "pixelplay:image-provider:v1";
   const ONBOARDED_LS_KEY = "pixelplay:onboarded:v1";
   useEffect(() => {
     try {
@@ -701,6 +709,10 @@ export default function Home() {
       }
       const k = localStorage.getItem(OPENAI_KEY_LS);
       if (k) setOpenaiKey(k);
+      const fk = localStorage.getItem(FAL_KEY_LS);
+      if (fk) setFalKey(fk);
+      const provider = localStorage.getItem(IMAGE_PROVIDER_LS);
+      if (provider === "openai" || provider === "fal") setImageProvider(provider);
       // Show onboarding modal on first visit.
       if (!localStorage.getItem(ONBOARDED_LS_KEY)) setOnboardingOpen(true);
       // Cross-session user profile (Hermes USER.md analog) — seed form
@@ -4190,12 +4202,19 @@ export default function Home() {
       {settingsOpen && (
         <SettingsModal
           initialKey={openaiKey}
+          initialFalKey={falKey}
+          initialProvider={imageProvider}
           onClose={() => setSettingsOpen(false)}
-          onSave={(k) => {
-            setOpenaiKey(k);
+          onSave={(prefs) => {
+            setOpenaiKey(prefs.openaiKey);
+            setFalKey(prefs.falKey);
+            setImageProvider(prefs.imageProvider);
             try {
-              if (k) localStorage.setItem(OPENAI_KEY_LS, k);
+              if (prefs.openaiKey) localStorage.setItem(OPENAI_KEY_LS, prefs.openaiKey);
               else localStorage.removeItem(OPENAI_KEY_LS);
+              if (prefs.falKey) localStorage.setItem(FAL_KEY_LS, prefs.falKey);
+              else localStorage.removeItem(FAL_KEY_LS);
+              localStorage.setItem(IMAGE_PROVIDER_LS, prefs.imageProvider);
             } catch {}
             setSettingsOpen(false);
           }}
@@ -4472,19 +4491,34 @@ function PaletteModal({
   );
 }
 
+type SettingsPrefs = {
+  openaiKey: string;
+  falKey: string;
+  imageProvider: "openai" | "fal";
+};
+
 function SettingsModal({
   initialKey,
+  initialFalKey,
+  initialProvider,
   onClose,
   onSave,
 }: {
   initialKey: string;
+  initialFalKey: string;
+  initialProvider: "openai" | "fal";
   onClose: () => void;
-  onSave: (key: string) => void;
+  onSave: (prefs: SettingsPrefs) => void;
 }) {
   const [draft, setDraft] = useState(initialKey);
+  const [falDraft, setFalDraft] = useState(initialFalKey);
+  const [provider, setProvider] = useState<"openai" | "fal">(initialProvider);
   const [show, setShow] = useState(false);
+  const [showFal, setShowFal] = useState(false);
   const [testStatus, setTestStatus] = useState<"idle" | "testing" | "ok" | "fail">("idle");
   const [testMsg, setTestMsg] = useState("");
+  const [falTestStatus, setFalTestStatus] = useState<"idle" | "testing" | "ok" | "fail">("idle");
+  const [falTestMsg, setFalTestMsg] = useState("");
 
   async function testConnection() {
     const key = draft.trim();
@@ -4514,6 +4548,34 @@ function SettingsModal({
     }
   }
 
+  async function testFalConnection() {
+    const key = falDraft.trim();
+    if (!key) {
+      setFalTestStatus("fail");
+      setFalTestMsg("Enter a key first.");
+      return;
+    }
+    setFalTestStatus("testing");
+    setFalTestMsg("");
+    try {
+      const res = await fetch("/api/test-fal-key", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-fal-key": key },
+      });
+      const data = (await res.json()) as { ok?: boolean; error?: string };
+      if (data.ok) {
+        setFalTestStatus("ok");
+        setFalTestMsg("Connected. Key accepted by FAL.");
+      } else {
+        setFalTestStatus("fail");
+        setFalTestMsg(data.error || "Unknown error");
+      }
+    } catch (err) {
+      setFalTestStatus("fail");
+      setFalTestMsg(err instanceof Error ? err.message : "Network error");
+    }
+  }
+
   // Reset status if the user edits the key after running a test.
   useEffect(() => {
     if (testStatus !== "idle") {
@@ -4522,6 +4584,22 @@ function SettingsModal({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draft]);
+  useEffect(() => {
+    if (falTestStatus !== "idle") {
+      setFalTestStatus("idle");
+      setFalTestMsg("");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [falDraft]);
+
+  function commit(next?: Partial<SettingsPrefs>) {
+    onSave({
+      openaiKey: draft.trim(),
+      falKey: falDraft.trim(),
+      imageProvider: provider,
+      ...next,
+    });
+  }
   return (
     <div
       className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4"
@@ -4535,7 +4613,7 @@ function SettingsModal({
           <div>
             <h2 className="font-pixel text-xl text-farm-grass">⚙ Settings</h2>
             <p className="text-xs opacity-70 mt-1">
-              Bring your own OpenAI key. Stored in your browser only — never sent anywhere except api.openai.com.
+              Bring your own API key. Stored in your browser only — never sent anywhere except the chosen provider.
             </p>
           </div>
           <button
@@ -4545,6 +4623,42 @@ function SettingsModal({
           >
             ×
           </button>
+        </div>
+
+        <div className="space-y-2">
+          <label className="block text-xs uppercase tracking-wide opacity-70">
+            Image model
+          </label>
+          <div className="grid grid-cols-1 gap-1.5">
+            <label className="flex items-start gap-2 px-2 py-1.5 border border-farm-wood/60 hover:border-farm-grass cursor-pointer">
+              <input
+                type="radio"
+                name="image-provider"
+                value="openai"
+                checked={provider === "openai"}
+                onChange={() => setProvider("openai")}
+                className="mt-0.5"
+              />
+              <div className="flex-1">
+                <div className="text-sm">OpenAI gpt-image-1</div>
+                <div className="text-[11px] opacity-60">Highest quality. ~$0.04 / image. Sprite-sheets, refs, masks.</div>
+              </div>
+            </label>
+            <label className="flex items-start gap-2 px-2 py-1.5 border border-farm-wood/60 hover:border-farm-grass cursor-pointer">
+              <input
+                type="radio"
+                name="image-provider"
+                value="fal"
+                checked={provider === "fal"}
+                onChange={() => setProvider("fal")}
+                className="mt-0.5"
+              />
+              <div className="flex-1">
+                <div className="text-sm">FAL Flux Schnell <span className="opacity-60">(fast/cheap)</span></div>
+                <div className="text-[11px] opacity-60">~$0.003 / image, ~2-5s. Single images only — no sprite-sheets.</div>
+              </div>
+            </label>
+          </div>
         </div>
 
         <div className="space-y-2">
@@ -4616,16 +4730,78 @@ function SettingsModal({
           </p>
         </div>
 
+        {provider === "fal" && (
+          <div className="space-y-2">
+            <label className="block text-xs uppercase tracking-wide opacity-70">
+              FAL API key
+            </label>
+            <div className="flex gap-2">
+              <input
+                type={showFal ? "text" : "password"}
+                value={falDraft}
+                onChange={(e) => setFalDraft(e.target.value)}
+                placeholder="fal-key-…"
+                className="flex-1 bg-farm-bg/40 border border-farm-wood text-farm-parchment text-sm px-2 py-1.5 focus:outline-none focus:border-farm-grass font-mono"
+              />
+              <button
+                onClick={() => setShowFal((v) => !v)}
+                className="px-2 py-1 text-xs border border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass"
+                title={showFal ? "Hide" : "Show"}
+              >
+                {showFal ? "🙈" : "👁"}
+              </button>
+              <button
+                type="button"
+                onClick={testFalConnection}
+                disabled={falTestStatus === "testing" || !falDraft.trim()}
+                className="px-2 py-1 text-xs border border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass disabled:opacity-40 disabled:cursor-not-allowed"
+                title="Verify the key against FAL"
+              >
+                {falTestStatus === "testing" ? "⏳" : "Test"}
+              </button>
+            </div>
+            {falTestStatus !== "idle" && (
+              <div
+                className={
+                  "text-[11px] " +
+                  (falTestStatus === "ok"
+                    ? "text-farm-grass"
+                    : falTestStatus === "fail"
+                    ? "text-red-300"
+                    : "opacity-70")
+                }
+              >
+                {falTestStatus === "testing" && "Testing…"}
+                {falTestStatus === "ok" && `✓ ${falTestMsg}`}
+                {falTestStatus === "fail" && `✗ ${falTestMsg}`}
+              </div>
+            )}
+            <p className="text-[11px] opacity-60">
+              Get a key at{" "}
+              <a
+                href="https://fal.ai/dashboard/keys"
+                target="_blank"
+                rel="noreferrer"
+                className="underline hover:text-farm-grass"
+              >
+                fal.ai/dashboard/keys
+              </a>
+              . Stored in your browser only.
+            </p>
+          </div>
+        )}
+
         <div className="flex items-center justify-between pt-2 border-t border-farm-wood/40">
           <button
             onClick={() => {
               setDraft("");
-              onSave("");
+              setFalDraft("");
+              onSave({ openaiKey: "", falKey: "", imageProvider: provider });
             }}
             className="text-xs text-red-300 opacity-70 hover:opacity-100"
-            title="Remove the saved key"
+            title="Remove all saved keys"
           >
-            Clear key
+            Clear keys
           </button>
           <div className="flex gap-2">
             <button
@@ -4635,7 +4811,7 @@ function SettingsModal({
               Cancel
             </button>
             <button
-              onClick={() => onSave(draft.trim())}
+              onClick={() => commit()}
               className="px-3 py-1 text-sm border border-farm-grass bg-farm-grass/20 text-farm-grass hover:bg-farm-grass/30"
             >
               Save
