@@ -332,7 +332,7 @@ Make the project presentable and export-friendly for real game developers.
 Let users choose a cheaper/faster image provider as an alternative to
 gpt-image-1 (~$0.04/image). FAL.ai's Flux Schnell runs at ~$0.003/image.
 
-- [ ] **FAL.ai route** — new `app/api/generate-fal/route.ts`. Accepts the
+- [x] **FAL.ai route** — new `app/api/generate-fal/route.ts`. Accepts the
       same body shape as `/api/generate` (prompt, size, quality, n). Calls
       the FAL REST API (`https://fal.run/fal-ai/flux/schnell`) with
       `x-fal-key` from header or env `FAL_API_KEY`. Returns `{urls: string[],
