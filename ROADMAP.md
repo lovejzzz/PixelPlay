@@ -485,7 +485,7 @@ and pixel-art typography (no new font imports, no new color systems).
       no-results state in the search bar but elevated (centered in the
       empty area, padded). Pure CSS/JSX — no new images.
 
-- [ ] **Loading skeletons during generation** — while `busy` is true and
+- [x] **Loading skeletons during generation** — while `busy` is true and
       a generation is in flight, render 1–4 shimmer-placeholder cards
       at the top of the asset gallery (count from the form's `n`
       variants). CSS-only shimmer (animated linear-gradient over a

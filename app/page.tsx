@@ -4659,7 +4659,7 @@ export default function Home() {
                 </button>
               </div>
             )}
-            {recent.length === 0 ? (
+            {recent.length === 0 && !busy ? (
               allAssets.length === 0 ? (
                 <div className="my-4 mx-auto max-w-xs text-center px-6 py-8 border-2 border-dashed border-farm-wood/40 bg-farm-ink/30">
                   <div className="text-7xl mb-3 leading-none">🎨</div>
@@ -4678,6 +4678,20 @@ export default function Home() {
               )
             ) : (
               <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
+                {busy &&
+                  Array.from({
+                    length: Math.min(4, Math.max(1, variants)),
+                  }).map((_, i) => (
+                    <div
+                      key={`forge-skeleton-${i}`}
+                      className="bg-farm-ink/60 border-2 border-farm-wood p-2 flex flex-col gap-2"
+                      aria-hidden="true"
+                    >
+                      <div className="aspect-square skeleton-shimmer" />
+                      <div className="h-3 skeleton-shimmer" />
+                      <div className="h-3 w-2/3 skeleton-shimmer" />
+                    </div>
+                  ))}
                 {recent.map((a) => (
                   <AssetCard
                     key={a.id}
