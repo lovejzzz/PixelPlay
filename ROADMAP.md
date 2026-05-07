@@ -371,7 +371,7 @@ says "make me a cozy forest tileset" and the agent generates the assets.
       `app/lib/agentTools.ts` exporting a `AGENT_TOOLS` constant
       (OpenAI function-calling format).
 
-- [ ] **/api/agent route** — `app/api/agent/route.ts`. Streaming SSE
+- [x] **/api/agent route** — `app/api/agent/route.ts`. Streaming SSE
       endpoint. Accepts `{messages: ChatMessage[], projectContext: string}`.
       Calls `gpt-4o` with the agent tool schema; streams back deltas.
       When a `tool_use` block arrives, returns it as a `data: {tool, args}`
