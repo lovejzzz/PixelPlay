@@ -363,7 +363,7 @@ Promote Concierge from SKIP-CRON to a fully cron-able multi-fire build.
 Multi-turn chat agent that *drives* the FORGE form via tool calls — user
 says "make me a cozy forest tileset" and the agent generates the assets.
 
-- [ ] **Agent tool schema** — define four tools the agent can call:
+- [x] **Agent tool schema** — define four tools the agent can call:
       `forge_asset` (prompt + mode + quality → triggers generation),
       `list_assets` (returns current asset names/types as context),
       `set_project_memory` (writes a string to project MEMORY blob),
