@@ -29,6 +29,7 @@ import { SceneCanvas, type CanvasAsset } from "./components/SceneCanvas";
 import { ScenePlayer } from "./components/ScenePlayer";
 import { ToastHost, toast } from "./components/ToastHost";
 import { ConfirmHost, confirm as confirmDialog } from "./components/ConfirmDialog";
+import { Tooltip } from "./components/Tooltip";
 import { SHORTCUTS } from "./lib/shortcuts";
 import JSZip from "jszip";
 import {
@@ -5986,12 +5987,13 @@ function StorageIndicator() {
       ? "text-yellow-300"
       : "opacity-60";
   return (
-    <div
-      className={`text-[10px] font-mono ${tone}`}
-      title={`Browser storage: ${(usage / 1048576).toFixed(0)} MB used of ${(quota / 1073741824).toFixed(1)} GB available (${(ratio * 100).toFixed(1)}%)`}
+    <Tooltip
+      label={`Browser storage: ${(usage / 1048576).toFixed(0)} MB used of ${(quota / 1073741824).toFixed(1)} GB available (${(ratio * 100).toFixed(1)}%)`}
     >
-      💾 {formatStorageBytes(usage)} / {formatStorageBytes(quota)}
-    </div>
+      <div className={`text-[10px] font-mono ${tone}`}>
+        💾 {formatStorageBytes(usage)} / {formatStorageBytes(quota)}
+      </div>
+    </Tooltip>
   );
 }
 
@@ -6020,12 +6022,14 @@ function CostIndicator({
     tier ? `  Chat (parsing/layout): ${formatDollars(tier.chat)}` : null,
   ].filter(Boolean).join("\n");
   return (
-    <div className="text-[11px] opacity-60 flex items-center gap-2" title={tooltip}>
-      <span>💰 session {formatDollars(session.cost)}</span>
-      {project.cost > 0 && (
-        <span className="opacity-70">/ project {formatDollars(project.cost)}</span>
-      )}
-    </div>
+    <Tooltip label={tooltip}>
+      <div className="text-[11px] opacity-60 flex items-center gap-2">
+        <span>💰 session {formatDollars(session.cost)}</span>
+        {project.cost > 0 && (
+          <span className="opacity-70">/ project {formatDollars(project.cost)}</span>
+        )}
+      </div>
+    </Tooltip>
   );
 }
 
@@ -6855,38 +6859,42 @@ function ScenesView({
           <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] opacity-70">
             <span className="opacity-60">💡 Drag from 📦 Assets onto canvas.</span>
             <div className="flex items-center gap-3">
-              <button
-                type="button"
-                onClick={onAddTriggerZone}
-                title="Add an invisible trigger zone (fires a message when the player enters in Play Mode)"
-                className="px-2 py-0.5 border border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass"
-              >
-                ⚡ + Trigger
-              </button>
-              <button
-                type="button"
-                onClick={onAddPointLight}
-                title="Add a point light (radial glow in Play Mode)"
-                className="px-2 py-0.5 border border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass"
-              >
-                💡 + Light
-              </button>
-              <button
-                type="button"
-                onClick={onAddParticleEmitter}
-                title="Add a particle emitter (sparkle/smoke in Play Mode)"
-                className="px-2 py-0.5 border border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass"
-              >
-                ✨ + Emitter
-              </button>
-              <button
-                type="button"
-                onClick={onAddSoundTrigger}
-                title="Add a sound trigger (audio plays when player enters its bbox in Play Mode)"
-                className="px-2 py-0.5 border border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass"
-              >
-                🔊 + Sound
-              </button>
+              <Tooltip label="Add an invisible trigger zone (fires a message when the player enters in Play Mode)">
+                <button
+                  type="button"
+                  onClick={onAddTriggerZone}
+                  className="px-2 py-0.5 border border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass"
+                >
+                  ⚡ + Trigger
+                </button>
+              </Tooltip>
+              <Tooltip label="Add a point light (radial glow in Play Mode)">
+                <button
+                  type="button"
+                  onClick={onAddPointLight}
+                  className="px-2 py-0.5 border border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass"
+                >
+                  💡 + Light
+                </button>
+              </Tooltip>
+              <Tooltip label="Add a particle emitter (sparkle/smoke in Play Mode)">
+                <button
+                  type="button"
+                  onClick={onAddParticleEmitter}
+                  className="px-2 py-0.5 border border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass"
+                >
+                  ✨ + Emitter
+                </button>
+              </Tooltip>
+              <Tooltip label="Add a sound trigger (audio plays when player enters its bbox in Play Mode)">
+                <button
+                  type="button"
+                  onClick={onAddSoundTrigger}
+                  className="px-2 py-0.5 border border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass"
+                >
+                  🔊 + Sound
+                </button>
+              </Tooltip>
               <label className="flex items-center gap-1" title="0=midnight · 0.5=noon · 1=midnight">
                 ☀️
                 <input
@@ -8695,66 +8703,73 @@ function AssetCard({
           ))}
         </select>
         <div className="flex gap-1">
-          <button
-            onClick={editing ? onCancelEdit : onStartEdit}
-            title={editing ? "Cancel edit" : "Edit this asset"}
-            className={`px-1.5 py-0.5 border ${
-              editing
-                ? "border-farm-grass text-farm-grass bg-farm-grass/10"
-                : "border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass"
-            }`}
-          >
-            ✏️
-          </button>
-          <button
-            onClick={onUseAsProjectStyle}
-            title="Use as project style reference"
-            className="px-1.5 py-0.5 border border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass"
-          >
-            🎨
-          </button>
-          <button
-            onClick={onApplyPalette}
-            title="Snap to palette (NES, GameBoy, Pico-8…)"
-            className="px-1.5 py-0.5 border border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass"
-          >
-            🎨🎯
-          </button>
+          <Tooltip label={editing ? "Cancel edit" : "Edit this asset"}>
+            <button
+              onClick={editing ? onCancelEdit : onStartEdit}
+              className={`px-1.5 py-0.5 border ${
+                editing
+                  ? "border-farm-grass text-farm-grass bg-farm-grass/10"
+                  : "border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass"
+              }`}
+            >
+              ✏️
+            </button>
+          </Tooltip>
+          <Tooltip label="Use as project style reference">
+            <button
+              onClick={onUseAsProjectStyle}
+              className="px-1.5 py-0.5 border border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass"
+            >
+              🎨
+            </button>
+          </Tooltip>
+          <Tooltip label="Snap to palette (NES, GameBoy, Pico-8…)">
+            <button
+              onClick={onApplyPalette}
+              className="px-1.5 py-0.5 border border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass"
+            >
+              🎨🎯
+            </button>
+          </Tooltip>
           {isTile && (
             <>
-              <button
-                onClick={onMakeSeamless}
-                title="Make seamlessly tileable (offset+blend)"
-                className="px-1.5 py-0.5 border border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass"
-              >
-                🧵
-              </button>
-              {sceneActive && (
+              <Tooltip label="Make seamlessly tileable (offset+blend)">
                 <button
-                  onClick={onSetAsSceneBackground}
-                  title="Use as background for the active scene"
+                  onClick={onMakeSeamless}
                   className="px-1.5 py-0.5 border border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass"
                 >
-                  🪟
+                  🧵
                 </button>
+              </Tooltip>
+              {sceneActive && (
+                <Tooltip label="Use as background for the active scene">
+                  <button
+                    onClick={onSetAsSceneBackground}
+                    className="px-1.5 py-0.5 border border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass"
+                  >
+                    🪟
+                  </button>
+                </Tooltip>
               )}
             </>
           )}
-          <button
-            onClick={onDownloadPNG}
-            title="Download PNG"
-            className="px-1.5 py-0.5 border border-farm-grass text-farm-grass hover:bg-farm-grass/10"
-          >
-            ⬇
-          </button>
-          {isMultiFrame && (
+          <Tooltip label="Download PNG">
             <button
-              onClick={onDownloadFrames}
-              title="Download frames + atlas (zip)"
+              onClick={onDownloadPNG}
               className="px-1.5 py-0.5 border border-farm-grass text-farm-grass hover:bg-farm-grass/10"
             >
-              📦
+              ⬇
             </button>
+          </Tooltip>
+          {isMultiFrame && (
+            <Tooltip label="Download frames + atlas (zip)">
+              <button
+                onClick={onDownloadFrames}
+                className="px-1.5 py-0.5 border border-farm-grass text-farm-grass hover:bg-farm-grass/10"
+              >
+                📦
+              </button>
+            </Tooltip>
           )}
         </div>
       </div>

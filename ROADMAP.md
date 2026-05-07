@@ -466,7 +466,7 @@ and pixel-art typography (no new font imports, no new color systems).
       from a single constant in `app/lib/shortcuts.ts` so the help text
       can't drift from the actual handlers.
 
-- [ ] **Tooltip system** — new `app/components/Tooltip.tsx` wrapper that
+- [x] **Tooltip system** — new `app/components/Tooltip.tsx` wrapper that
       shows a styled label after 600ms hover, positioned above/below the
       target with edge clamping. Replaces the inconsistent `title=""`
       attributes on icon buttons (the cost/storage indicators, scene
