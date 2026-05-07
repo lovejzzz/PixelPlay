@@ -4556,6 +4556,7 @@ export default function Home() {
           )}
         </header>
 
+        <div key={rightTab} className="animate-tab-fade">
         {rightTab === "assets" ? (
           <>
             {allAssets.length > 0 && (
@@ -4954,6 +4955,7 @@ export default function Home() {
             onDelete={deleteRecipe}
           />
         )}
+        </div>
       </section>
 
       {paletteAssetId && assets[paletteAssetId] && (
@@ -5269,7 +5271,7 @@ function PaletteModal({
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="panel bg-farm-ink p-4 max-w-2xl w-full max-h-[90vh] overflow-y-auto"
+        className="panel animate-modal-in bg-farm-ink p-4 max-w-2xl w-full max-h-[90vh] overflow-y-auto"
       >
         <div className="flex items-center justify-between mb-3 border-b border-farm-wood pb-2">
           <h3 className="font-pixel text-lg text-farm-grass">🎯 Snap to palette</h3>
@@ -5462,7 +5464,7 @@ function SettingsModal({
       onClick={onClose}
     >
       <div
-        className="bg-farm-ink border-2 border-farm-wood w-full max-w-lg p-5 space-y-4"
+        className="bg-farm-ink animate-modal-in border-2 border-farm-wood w-full max-w-lg p-5 space-y-4"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-start justify-between">
@@ -5696,7 +5698,7 @@ function TrashModal({
       onClick={onClose}
     >
       <div
-        className="bg-farm-ink border-2 border-farm-wood w-full max-w-2xl max-h-[80vh] overflow-y-auto p-5 space-y-4"
+        className="bg-farm-ink animate-modal-in border-2 border-farm-wood w-full max-w-2xl max-h-[80vh] overflow-y-auto p-5 space-y-4"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-start justify-between">
@@ -5787,7 +5789,7 @@ function OnboardingModal({ onClose }: { onClose: () => void }) {
       onClick={onClose}
     >
       <div
-        className="bg-farm-ink border-2 border-farm-wood w-full max-w-md p-6 space-y-5"
+        className="bg-farm-ink animate-modal-in border-2 border-farm-wood w-full max-w-md p-6 space-y-5"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-start justify-between">
@@ -5854,7 +5856,7 @@ function ShortcutsModal({ onClose }: { onClose: () => void }) {
       onClick={onClose}
     >
       <div
-        className="bg-farm-ink border-2 border-farm-wood w-full max-w-lg max-h-[80vh] overflow-y-auto p-6 space-y-4"
+        className="bg-farm-ink animate-modal-in border-2 border-farm-wood w-full max-w-lg max-h-[80vh] overflow-y-auto p-6 space-y-4"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-start justify-between">
@@ -7934,7 +7936,7 @@ function ScenesView({
           onClick={() => setFailedItemsOpen(false)}
         >
           <div
-            className="bg-farm-ink border-2 border-farm-wood w-full max-w-lg p-5 space-y-4"
+            className="bg-farm-ink animate-modal-in border-2 border-farm-wood w-full max-w-lg p-5 space-y-4"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-start justify-between">
@@ -8567,7 +8569,7 @@ function AssetCard({
   return (
     <div
       ref={cardRef}
-      className={`group bg-farm-ink/60 border-2 p-2 flex flex-col gap-2 relative ${
+      className={`group animate-card-in bg-farm-ink/60 border-2 p-2 flex flex-col gap-2 relative ${
         selectMode && selected
           ? "border-farm-grass ring-2 ring-farm-grass/40"
           : "border-farm-wood"

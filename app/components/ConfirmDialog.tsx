@@ -99,7 +99,7 @@ export function ConfirmHost() {
       onClick={() => resolve(false)}
     >
       <div
-        className="bg-farm-ink border-2 border-farm-wood w-full max-w-md p-5 space-y-4"
+        className="bg-farm-ink animate-modal-in border-2 border-farm-wood w-full max-w-md p-5 space-y-4"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-start justify-between gap-3">

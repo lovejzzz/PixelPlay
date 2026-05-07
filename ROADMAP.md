@@ -513,7 +513,7 @@ and pixel-art typography (no new font imports, no new color systems).
 
 ### Polish
 
-- [ ] **Animated transitions** — add small CSS transitions in three
+- [x] **Animated transitions** — add small CSS transitions in three
       places: (1) asset cards fade-in on mount (200ms opacity +
       transform: translateY(4px) → 0), (2) modals slide-in (200ms
       transform: translateY(-12px) → 0 with ease-out), (3) right-tab

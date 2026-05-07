@@ -112,3 +112,25 @@ textarea, input {
 @media (prefers-reduced-motion: reduce) {
   .skeleton-shimmer { animation: none; }
 }
+
+/* Animated transitions — bound and gated behind prefers-reduced-motion. */
+@keyframes pwf-card-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes pwf-modal-in {
+  from { opacity: 0; transform: translateY(-12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes pwf-tab-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.animate-card-in  { animation: pwf-card-in 200ms ease-out both; }
+.animate-modal-in { animation: pwf-modal-in 200ms ease-out both; }
+.animate-tab-fade { animation: pwf-tab-fade 150ms ease-out both; }
+@media (prefers-reduced-motion: reduce) {
+  .animate-card-in,
+  .animate-modal-in,
+  .animate-tab-fade { animation: none; }
+}
