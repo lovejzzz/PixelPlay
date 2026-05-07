@@ -14,6 +14,12 @@ import {
 } from "./lib/userProfile";
 import { makeSeamless } from "./lib/seamless";
 import { rankBySimilarity } from "./lib/cosineSearch";
+import {
+  getSceneSyncClient,
+  openSceneChannel,
+  broadcastScene,
+} from "./lib/sceneSync";
+import type { RealtimeChannel } from "@supabase/supabase-js";
 import type {
   ForgeAssetArgs,
   SetProjectMemoryArgs,
@@ -212,6 +218,11 @@ type Project = {
    *  successful FORGE pattern as a one-click "apply this preset" so the
    *  user can replay similar generations without re-typing. */
   recipes?: Record<string, Recipe>;
+  /** When ON, the active scene opens a Supabase Realtime broadcast
+   *  channel and syncs `updateScene` calls between tabs / collaborators.
+   *  Off by default. Requires `NEXT_PUBLIC_SUPABASE_URL` +
+   *  `NEXT_PUBLIC_SUPABASE_ANON_KEY` env vars to be set at build time. */
+  syncEnabled?: boolean;
   createdAt: number;
 };
 
@@ -497,6 +508,17 @@ export default function Home() {
   const agentScrollRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
+  /** Real-time scene sync via Supabase Realtime. When the project's
+   *  `syncEnabled` flag is on AND env vars are configured, the active
+   *  scene opens a broadcast channel — local `updateScene` calls go out
+   *  via `broadcastScene`, remote scene snapshots come back through
+   *  `updateScene(..., { record: false, remote: true })`. */
+  const syncChannelRef = useRef<RealtimeChannel | null>(null);
+  const syncSceneIdRef = useRef<string | null>(null);
+  const [syncStatus, setSyncStatus] = useState<
+    "off" | "joining" | "live" | "error"
+  >("off");
+
   const currentProject = projects[currentId];
   const assets = currentProject?.assets || {};
   const scenes = currentProject?.scenes || {};
@@ -539,6 +561,17 @@ export default function Home() {
       const cur = p[currentId];
       if (!cur) return p;
       return { ...p, [currentId]: { ...cur, memory: trimmed || undefined } };
+    });
+  }
+
+  /** Toggle Supabase Realtime sync for the current project. Off by
+   *  default. The channel-management effect below opens / closes the
+   *  broadcast channel based on this flag + the active scene id. */
+  function setSyncEnabled(enabled: boolean) {
+    setProjects((p) => {
+      const cur = p[currentId];
+      if (!cur) return p;
+      return { ...p, [currentId]: { ...cur, syncEnabled: enabled || undefined } };
     });
   }
 
@@ -632,9 +665,10 @@ export default function Home() {
   function updateScene(
     sceneId: string,
     updater: (s: Scene) => Scene,
-    opts?: { record?: boolean }
+    opts?: { record?: boolean; remote?: boolean }
   ) {
     const record = opts?.record !== false;
+    const remote = opts?.remote === true;
     setScenes((all) => {
       const s = all[sceneId];
       if (!s) return all;
@@ -648,6 +682,15 @@ export default function Home() {
             [sceneId]: { past: [...e.past, s].slice(-30), future: [] },
           };
         });
+      }
+      // Sync local edits out to the live channel. Remote-applied edits
+      // are tagged with `remote:true` so they don't echo back.
+      if (
+        !remote &&
+        syncChannelRef.current &&
+        sceneId === syncSceneIdRef.current
+      ) {
+        broadcastScene(syncChannelRef.current, next);
       }
       return { ...all, [sceneId]: next };
     });
@@ -1625,6 +1668,60 @@ export default function Home() {
     if (head.quality) setQuality(head.quality);
     setPendingSubmitPrompt(head.prompt);
   }, [busy, pendingSubmitPrompt, pendingAgentForges]);
+
+  // Real-time scene sync: when syncEnabled is on for the current project
+  // and the user has switched into an active scene, open a Supabase
+  // Realtime broadcast channel. Local edits go out via `updateScene`'s
+  // broadcast hook; remote scene snapshots come back through here and
+  // are applied via `updateScene(..., {record:false, remote:true})` so
+  // they don't pollute the undo stack or echo back to the network.
+  useEffect(() => {
+    const sync = currentProject?.syncEnabled === true;
+    const sceneId = activeSceneId;
+    const projectId = currentId;
+    if (!sync || !sceneId || !projectId) {
+      if (syncChannelRef.current) {
+        syncChannelRef.current = null;
+        syncSceneIdRef.current = null;
+      }
+      setSyncStatus("off");
+      return;
+    }
+    const client = getSceneSyncClient();
+    if (!client) {
+      setSyncStatus("error");
+      return;
+    }
+    const { channel, close } = openSceneChannel<Scene>(
+      client,
+      projectId,
+      sceneId,
+      (remoteScene) => {
+        // Replace the entire scene with the remote snapshot. Skip undo
+        // recording AND skip rebroadcasting to avoid an echo loop.
+        updateScene(remoteScene.id, () => remoteScene, {
+          record: false,
+          remote: true,
+        });
+      },
+      (status) => {
+        if (status === "joining") setSyncStatus("joining");
+        else if (status === "live") setSyncStatus("live");
+        else if (status === "error") setSyncStatus("error");
+        else setSyncStatus("off");
+      },
+    );
+    syncChannelRef.current = channel;
+    syncSceneIdRef.current = sceneId;
+    return () => {
+      close();
+      if (syncChannelRef.current === channel) {
+        syncChannelRef.current = null;
+        syncSceneIdRef.current = null;
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentId, activeSceneId, currentProject?.syncEnabled]);
 
   // ------------- handlers -------------
 
@@ -4049,6 +4146,9 @@ export default function Home() {
           hasConfig={hasStyleConfig}
           memory={getEffectiveProjectMemory()}
           onChangeMemory={setProjectMemory}
+          syncEnabled={currentProject?.syncEnabled === true}
+          onChangeSyncEnabled={setSyncEnabled}
+          syncStatus={syncStatus}
         />
 
         {/* Messages */}
@@ -4723,6 +4823,7 @@ export default function Home() {
             }
             onDuplicateScene={duplicateScene}
             onRenameScene={renameScene}
+            syncStatus={syncStatus}
             onMoveSceneItem={(id, x, y) =>
               activeScene && moveSceneItem(activeScene.id, id, x, y)
             }
@@ -5903,6 +6004,9 @@ function ProjectStyleSection({
   hasConfig,
   memory,
   onChangeMemory,
+  syncEnabled,
+  onChangeSyncEnabled,
+  syncStatus,
 }: {
   open: boolean;
   onToggle: () => void;
@@ -5916,6 +6020,13 @@ function ProjectStyleSection({
    *  May be empty string. */
   memory: string;
   onChangeMemory: (text: string) => void;
+  syncEnabled: boolean;
+  onChangeSyncEnabled: (enabled: boolean) => void;
+  /** Live status of the active scene's Supabase Realtime channel. Drives
+   *  the "● live" dot in the scene header — surfaced here so users can
+   *  see why the toggle isn't doing what they expect (e.g. env vars not
+   *  configured at build time). */
+  syncStatus: "off" | "joining" | "live" | "error";
 }) {
   const presetLabel = STYLE_PRESETS.find((p) => p.value === style.preset)?.label || "Cozy";
   return (
@@ -5983,6 +6094,36 @@ function ProjectStyleSection({
                 <input type="file" accept="image/*" className="hidden" onChange={onUploadRef} />
               </label>
             )}
+          </div>
+
+          {/* Real-time scene sync (Supabase Realtime). Off by default —
+              when on, the active scene opens a broadcast channel so
+              edits sync between tabs / collaborators. */}
+          <div className="pt-2 border-t border-farm-wood/40">
+            <label className="flex items-center gap-2 text-xs cursor-pointer">
+              <input
+                type="checkbox"
+                checked={syncEnabled}
+                onChange={(e) => onChangeSyncEnabled(e.target.checked)}
+                className="accent-farm-grass"
+              />
+              <span>🌐 Real-time scene sync</span>
+              {syncEnabled && syncStatus === "live" && (
+                <span className="text-farm-grass">● live</span>
+              )}
+              {syncEnabled && syncStatus === "joining" && (
+                <span className="opacity-60">connecting…</span>
+              )}
+              {syncEnabled && syncStatus === "error" && (
+                <span className="text-red-400" title="Supabase env vars missing or channel error">
+                  ✗ unavailable
+                </span>
+              )}
+            </label>
+            <p className="text-[10px] opacity-50 mt-1 leading-snug">
+              Broadcasts each scene edit to other tabs or collaborators
+              joined to the same scene. Requires Supabase env vars.
+            </p>
           </div>
 
           {/* Project MEMORY blob — Hermes-style frozen-into-prompt knowledge. */}
@@ -6159,6 +6300,7 @@ function ScenesView({
   onClearFailedItems,
   onDuplicateScene,
   onRenameScene,
+  syncStatus,
 }: {
   scenes: Record<string, Scene>;
   assets: Record<string, Asset>;
@@ -6244,6 +6386,10 @@ function ScenesView({
   onClearFailedItems: (sceneId: string) => void;
   onDuplicateScene: (sceneId: string) => void;
   onRenameScene: (sceneId: string, name: string) => void;
+  /** Live status of the active scene's Supabase Realtime channel. When
+   *  "live", a green `● live` dot renders next to the scene name to
+   *  signal that local edits are being broadcast. */
+  syncStatus: "off" | "joining" | "live" | "error";
 }) {
   const [failedItemsOpen, setFailedItemsOpen] = useState(false);
   const [editingSceneName, setEditingSceneName] = useState(false);
@@ -6335,6 +6481,15 @@ function ScenesView({
         )}
         {activeScene && !editingSceneName && (
           <>
+            {syncStatus === "live" && (
+              <span
+                title="Real-time sync is live — edits are broadcast to other tabs"
+                className="text-farm-grass text-xs flex items-center gap-1"
+              >
+                <span>●</span>
+                <span>live</span>
+              </span>
+            )}
             <button
               type="button"
               onClick={() => {

@@ -415,7 +415,7 @@ Let users share projects via a link and (optionally) co-edit in real time.
       clear the query param after import. Shows a "Importing shared
       project…" spinner in the header during the fetch.
 
-- [ ] **Real-time scene sync** — add a `syncEnabled` toggle in project
+- [x] **Real-time scene sync** — add a `syncEnabled` toggle in project
       settings (off by default). When on, open a Supabase Realtime channel
       named `scene:<projectId>:<sceneId>`. Broadcast each `updateScene`
       call as a JSON patch; receive remote patches and apply via
