@@ -235,6 +235,18 @@ const PROJECT_MEMORY_CAP = 2200;
 
 type RightTab = "assets" | "scenes" | "recipes";
 
+/** Concierge agent (Phase 10) — internal message representation rendered
+ *  inside the agent drawer. Wire format sent to `/api/agent` is the
+ *  OpenAI Chat Completions shape (`{role, content, tool_calls?}`); we
+ *  flatten tool-calls into separate visual chips here so each gets its
+ *  own row. Tool execution / `tool_result` rounds land in a follow-up
+ *  roadmap item — `tool_call` chips are display-only for now. */
+type AgentMsg =
+  | { kind: "user"; text: string }
+  | { kind: "assistant"; text: string; streaming?: boolean }
+  | { kind: "tool_call"; id: string; name: string; args: unknown }
+  | { kind: "error"; text: string };
+
 // ----------------------------------------------------------- constants
 
 /** UI-level generation modes. Character keeps pose / walk-cycle controls;
@@ -459,6 +471,16 @@ export default function Home() {
    *  in the same session but not across reloads (intentional — copy/paste
    *  shouldn't leak items between sessions). */
   const [sceneClipboard, setSceneClipboard] = useState<SceneItem[]>([]);
+  /** Concierge agent drawer at the bottom of the FORGE panel. Toggled by
+   *  the 🤖 Agent button in the panel header. Streams from `/api/agent`
+   *  and renders user/assistant text + tool-call chips inline. Tool-call
+   *  execution lands in a follow-up roadmap item — for now the chips are
+   *  display-only. */
+  const [agentOpen, setAgentOpen] = useState(false);
+  const [agentMessages, setAgentMessages] = useState<AgentMsg[]>([]);
+  const [agentInput, setAgentInput] = useState("");
+  const [agentBusy, setAgentBusy] = useState(false);
+  const agentScrollRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const currentProject = projects[currentId];
@@ -795,6 +817,208 @@ export default function Home() {
     return h;
   }
 
+  /** Build a small text snapshot of the current project for the agent's
+   *  system prompt. Capped to a few KB so the agent has enough context to
+   *  reference existing assets / scenes / recipes / memory without
+   *  ballooning request size. */
+  function buildAgentProjectContext(): string {
+    const cur = projects[currentId];
+    if (!cur) return "";
+    const lines: string[] = [];
+    lines.push(`Project: ${cur.name}`);
+    const liveAssets = Object.values(cur.assets || {}).filter(
+      (a) => !a.trashedAt
+    );
+    if (liveAssets.length > 0) {
+      const previews = liveAssets
+        .slice(0, 30)
+        .map((a) => `- ${a.name || a.prompt} (${a.assetType})`)
+        .join("\n");
+      lines.push(`Assets (${liveAssets.length}):\n${previews}`);
+    }
+    const sceneList = Object.values(cur.scenes || {});
+    if (sceneList.length > 0) {
+      const names = sceneList
+        .slice(0, 10)
+        .map((s) => `- ${s.name}`)
+        .join("\n");
+      lines.push(`Scenes (${sceneList.length}):\n${names}`);
+    }
+    const recipeList = Object.values(cur.recipes || {});
+    if (recipeList.length > 0) {
+      const recipes = recipeList
+        .slice(0, 10)
+        .map((r) => `- ${r.name} (${r.mode})`)
+        .join("\n");
+      lines.push(`Recipes (${recipeList.length}):\n${recipes}`);
+    }
+    const mem = (cur.memory ?? cur.style?.text ?? "").trim();
+    if (mem) lines.push(`Memory:\n${mem.slice(0, 600)}`);
+    return lines.join("\n\n");
+  }
+
+  /** Send the current agent conversation to `/api/agent` and stream the
+   *  response. Each `delta` event appends to the in-flight assistant
+   *  message; each `tool_call` event renders an inline chip. Tool
+   *  execution itself is the next roadmap item — for this milestone the
+   *  chips are display-only. */
+  async function sendAgentMessage(text: string) {
+    const trimmed = text.trim();
+    if (!trimmed || agentBusy) return;
+    if (!openaiKey.trim()) {
+      setAgentMessages((m) => [
+        ...m,
+        { kind: "user", text: trimmed },
+        {
+          kind: "error",
+          text: "No OpenAI key. Open ⚙ Settings and paste your key.",
+        },
+      ]);
+      setAgentInput("");
+      return;
+    }
+    // Build wire-format history from the existing visual log. Tool-call
+    // chips are dropped from the wire request since we don't have
+    // tool_results yet — the OpenAI API rejects assistant tool_calls
+    // without a matching tool message. Once tool execution lands, this
+    // builder will round-trip both directions.
+    const wireHistory: Array<{ role: "user" | "assistant"; content: string }> = [];
+    for (const m of agentMessages) {
+      if (m.kind === "user") wireHistory.push({ role: "user", content: m.text });
+      else if (m.kind === "assistant" && m.text)
+        wireHistory.push({ role: "assistant", content: m.text });
+    }
+    wireHistory.push({ role: "user", content: trimmed });
+
+    setAgentMessages((m) => [
+      ...m,
+      { kind: "user", text: trimmed },
+      { kind: "assistant", text: "", streaming: true },
+    ]);
+    setAgentInput("");
+    setAgentBusy(true);
+
+    const appendAssistantDelta = (delta: string) => {
+      setAgentMessages((m) => {
+        const next = [...m];
+        for (let i = next.length - 1; i >= 0; i--) {
+          const cur = next[i];
+          if (cur.kind === "assistant" && cur.streaming) {
+            next[i] = { ...cur, text: cur.text + delta };
+            return next;
+          }
+        }
+        return next;
+      });
+    };
+    const finalizeAssistant = () => {
+      setAgentMessages((m) =>
+        m.map((cur) =>
+          cur.kind === "assistant" && cur.streaming
+            ? { ...cur, streaming: false }
+            : cur
+        )
+      );
+    };
+    const insertToolCall = (id: string, name: string, args: unknown) => {
+      setAgentMessages((m) => {
+        // Insert the tool-call chip just before the streaming assistant
+        // bubble so chips appear in the order the model emitted them.
+        const next = [...m];
+        const lastIdx = next.length - 1;
+        if (
+          lastIdx >= 0 &&
+          next[lastIdx].kind === "assistant" &&
+          next[lastIdx].streaming
+        ) {
+          next.splice(lastIdx, 0, { kind: "tool_call", id, name, args });
+          return next;
+        }
+        next.push({ kind: "tool_call", id, name, args });
+        return next;
+      });
+    };
+
+    try {
+      const res = await fetch("/api/agent", {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({
+          messages: wireHistory,
+          projectContext: buildAgentProjectContext(),
+        }),
+      });
+      if (!res.ok || !res.body) {
+        const errText = await res.text().catch(() => "");
+        let parsed = "";
+        try {
+          parsed = (JSON.parse(errText) as { error?: string }).error || "";
+        } catch {
+          parsed = errText;
+        }
+        finalizeAssistant();
+        setAgentMessages((m) => [
+          ...m,
+          {
+            kind: "error",
+            text: parsed || `Agent request failed (${res.status})`,
+          },
+        ]);
+        return;
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let idx;
+        while ((idx = buf.indexOf("\n\n")) !== -1) {
+          const chunk = buf.slice(0, idx);
+          buf = buf.slice(idx + 2);
+          for (const line of chunk.split("\n")) {
+            if (!line.startsWith("data: ")) continue;
+            const data = line.slice(6).trim();
+            if (!data) continue;
+            let evt: {
+              type?: string;
+              text?: string;
+              id?: string;
+              name?: string;
+              args?: unknown;
+              message?: string;
+            };
+            try {
+              evt = JSON.parse(data);
+            } catch {
+              continue;
+            }
+            if (evt.type === "delta" && typeof evt.text === "string") {
+              appendAssistantDelta(evt.text);
+            } else if (evt.type === "tool_call") {
+              insertToolCall(evt.id || "", evt.name || "", evt.args);
+            } else if (evt.type === "error") {
+              setAgentMessages((m) => [
+                ...m,
+                { kind: "error", text: evt.message || "Agent error" },
+              ]);
+            }
+          }
+        }
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setAgentMessages((m) => [
+        ...m,
+        { kind: "error", text: `Agent stream failed: ${msg}` },
+      ]);
+    } finally {
+      finalizeAssistant();
+      setAgentBusy(false);
+    }
+  }
+
   /** Pick the image-gen endpoint + headers based on the user's provider
    *  preference. Scene mode (`splitItems`) always routes to OpenAI since
    *  FAL has no scene parser; everything else honours the selector. */
@@ -1041,6 +1265,14 @@ export default function Home() {
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [messages]);
+
+  useEffect(() => {
+    if (!agentOpen) return;
+    agentScrollRef.current?.scrollTo({
+      top: agentScrollRef.current.scrollHeight,
+      behavior: "smooth",
+    });
+  }, [agentMessages, agentOpen]);
 
   // Editor-style keyboard shortcuts when the scenes tab is active and an
   // item is selected. Shortcuts ignore focus-in-input/textarea so users can
@@ -3448,6 +3680,17 @@ export default function Home() {
                   onImport={importProject}
                 />
                 <button
+                  onClick={() => setAgentOpen((v) => !v)}
+                  title="Concierge agent — chat to drive FORGE via tool calls"
+                  className={`px-2 py-1 text-xs border-2 bg-farm-ink/60 ${
+                    agentOpen
+                      ? "border-farm-grass text-farm-grass"
+                      : "border-farm-wood hover:border-farm-grass hover:text-farm-grass"
+                  }`}
+                >
+                  🤖 Agent
+                </button>
+                <button
                   onClick={() => setSettingsOpen(true)}
                   title="Settings — configure your OpenAI API key"
                   className="px-2 py-1 text-xs border-2 border-farm-wood bg-farm-ink/60 hover:border-farm-grass hover:text-farm-grass"
@@ -3568,6 +3811,23 @@ export default function Home() {
             </div>
           )}
         </div>
+
+        {/* Agent drawer — collapsible Concierge chat. Toggle in panel
+            header. Streams from `/api/agent`; each tool_call event surfaces
+            as an inline chip. Tool execution is the next roadmap item;
+            for now the chips are display-only. */}
+        {agentOpen && (
+          <AgentDrawer
+            messages={agentMessages}
+            input={agentInput}
+            busy={agentBusy}
+            scrollRef={agentScrollRef}
+            onChangeInput={setAgentInput}
+            onSend={() => sendAgentMessage(agentInput)}
+            onClear={() => setAgentMessages([])}
+            onClose={() => setAgentOpen(false)}
+          />
+        )}
 
         {/* Form */}
         <form onSubmit={handleSubmit} className="space-y-2 text-sm">
@@ -5021,6 +5281,161 @@ function OnboardingModal({ onClose }: { onClose: () => void }) {
       </div>
     </div>
   );
+}
+
+/** Concierge agent drawer — appears between the chat-history scroller
+ *  and the FORGE form when toggled open. Renders the running message log
+ *  (user / assistant / tool-call / error chips) and a small composer
+ *  input. Tool execution itself lands in the next roadmap item; this
+ *  drawer just streams text + surfaces tool-call chips. */
+function AgentDrawer({
+  messages,
+  input,
+  busy,
+  scrollRef,
+  onChangeInput,
+  onSend,
+  onClear,
+  onClose,
+}: {
+  messages: AgentMsg[];
+  input: string;
+  busy: boolean;
+  scrollRef: React.RefObject<HTMLDivElement>;
+  onChangeInput: (v: string) => void;
+  onSend: () => void;
+  onClear: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <div className="border-2 border-farm-wood bg-farm-ink/40 mb-3">
+      <div className="flex items-center justify-between px-2 py-1 border-b border-farm-wood/60 text-xs">
+        <span className="opacity-70">🤖 Concierge agent</span>
+        <div className="flex items-center gap-1">
+          {messages.length > 0 && (
+            <button
+              type="button"
+              onClick={onClear}
+              disabled={busy}
+              title="Clear conversation"
+              className="px-1.5 py-0.5 opacity-60 hover:opacity-100 disabled:opacity-30"
+            >
+              Clear
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onClose}
+            title="Close drawer"
+            className="px-1.5 py-0.5 opacity-60 hover:opacity-100"
+          >
+            ✕
+          </button>
+        </div>
+      </div>
+      <div
+        ref={scrollRef}
+        className="max-h-48 overflow-y-auto px-2 py-2 space-y-1.5 text-xs"
+      >
+        {messages.length === 0 && (
+          <p className="opacity-50 italic">
+            Ask the agent for a batch — e.g. &ldquo;make me a cozy forest tileset&rdquo;.
+          </p>
+        )}
+        {messages.map((m, i) => {
+          if (m.kind === "user") {
+            return (
+              <div key={i} className="flex justify-end">
+                <span className="px-2 py-1 bg-farm-grass/20 border border-farm-grass/60 text-farm-grass max-w-[85%] whitespace-pre-wrap">
+                  {m.text}
+                </span>
+              </div>
+            );
+          }
+          if (m.kind === "assistant") {
+            return (
+              <div key={i} className="flex justify-start">
+                <span className="px-2 py-1 bg-farm-wood/30 border border-farm-wood max-w-[85%] whitespace-pre-wrap">
+                  {m.text || (m.streaming ? "…" : "")}
+                </span>
+              </div>
+            );
+          }
+          if (m.kind === "tool_call") {
+            const preview = formatAgentToolPreview(m.name, m.args);
+            return (
+              <div key={i} className="flex justify-start">
+                <span className="px-2 py-0.5 bg-farm-sky/15 border border-farm-sky/60 text-farm-sky font-mono">
+                  ⚙ {m.name}
+                  {preview ? `: ${preview}` : ""}
+                </span>
+              </div>
+            );
+          }
+          // error
+          return (
+            <div key={i} className="flex justify-start">
+              <span className="px-2 py-0.5 bg-red-900/30 border border-red-500/60 text-red-300">
+                ⚠ {m.text}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+      <div className="flex gap-1 p-2 border-t border-farm-wood/60">
+        <input
+          type="text"
+          value={input}
+          onChange={(e) => onChangeInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.nativeEvent.isComposing) {
+              e.preventDefault();
+              onSend();
+            }
+          }}
+          placeholder="Ask the agent…"
+          disabled={busy}
+          className="flex-1 bg-farm-ink/60 border border-farm-wood px-2 py-1 text-xs text-farm-parchment focus:outline-none focus:border-farm-grass disabled:opacity-50"
+        />
+        <button
+          type="button"
+          onClick={onSend}
+          disabled={busy || !input.trim()}
+          className="px-3 py-1 text-xs border border-farm-grass text-farm-grass hover:bg-farm-grass/20 disabled:opacity-40 disabled:hover:bg-transparent"
+        >
+          {busy ? "…" : "Send"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** One-line summary for a tool-call chip, e.g. `forge_asset` shows the
+ *  prompt; `apply_recipe` shows the recipe ref; `set_project_memory`
+ *  shows the first chunk of the new memory. Falls back to the raw JSON
+ *  arguments on unknown shapes. */
+function formatAgentToolPreview(name: string, args: unknown): string {
+  const a = (args && typeof args === "object" ? args : {}) as Record<
+    string,
+    unknown
+  >;
+  if (name === "forge_asset") {
+    const prompt = typeof a.prompt === "string" ? a.prompt : "";
+    const mode = typeof a.mode === "string" ? a.mode : "";
+    return [mode, prompt].filter(Boolean).join(" — ").slice(0, 80);
+  }
+  if (name === "apply_recipe") {
+    return typeof a.recipe === "string" ? a.recipe.slice(0, 60) : "";
+  }
+  if (name === "set_project_memory") {
+    return typeof a.memory === "string" ? a.memory.slice(0, 60) : "";
+  }
+  if (name === "list_assets") return "";
+  try {
+    return JSON.stringify(a).slice(0, 80);
+  } catch {
+    return "";
+  }
 }
 
 /** Tiny "💾 142 MB / 2 GB" line in the header. Polls `navigator.storage

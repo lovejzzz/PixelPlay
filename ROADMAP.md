@@ -379,7 +379,7 @@ says "make me a cozy forest tileset" and the agent generates the assets.
       `tool_result` back in the next message turn. Capped at 8 turns to
       prevent runaway loops. Uses `x-openai-key` header.
 
-- [ ] **Agent chat panel UI** — collapsible drawer at the bottom of the
+- [x] **Agent chat panel UI** — collapsible drawer at the bottom of the
       left (FORGE) panel. Toggle with a "🤖 Agent" button in the panel
       header. Drawer shows a scrolling message list (user/assistant/tool
       chips) and a text input. Sends to `/api/agent`, streams response,
