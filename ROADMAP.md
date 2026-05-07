@@ -457,7 +457,7 @@ and pixel-art typography (no new font imports, no new color systems).
 
 ### Discoverability
 
-- [ ] **Keyboard shortcuts help modal** — pressing `?` (Shift+/)
+- [x] **Keyboard shortcuts help modal** — pressing `?` (Shift+/)
       anywhere outside an input opens a modal listing every shortcut,
       grouped by section: FORGE (Enter, ⌘+Enter, ↑/↓ history), Scene
       editor (⌘+Z, ⌘+Shift+Z, middle-click pan, shift-click multi-

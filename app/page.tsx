@@ -29,6 +29,7 @@ import { SceneCanvas, type CanvasAsset } from "./components/SceneCanvas";
 import { ScenePlayer } from "./components/ScenePlayer";
 import { ToastHost, toast } from "./components/ToastHost";
 import { ConfirmHost, confirm as confirmDialog } from "./components/ConfirmDialog";
+import { SHORTCUTS } from "./lib/shortcuts";
 import JSZip from "jszip";
 import {
   estimateImageCost,
@@ -469,6 +470,7 @@ export default function Home() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [trashOpen, setTrashOpen] = useState(false);
   const [onboardingOpen, setOnboardingOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [shareToast, setShareToast] = useState<string | null>(null);
   /** True while a `?import=<id>` URL is being fetched + piped through
    *  importProject. Surfaces a spinner in the header so users know the
@@ -1536,6 +1538,23 @@ export default function Home() {
       behavior: "smooth",
     });
   }, [agentMessages, agentOpen]);
+
+  // Global "?" opens the shortcuts help modal — outside of inputs only,
+  // so prompt typing stays unaffected.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== "?") return;
+      const t = e.target;
+      if (t instanceof HTMLElement) {
+        const tag = t.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || t.isContentEditable) return;
+      }
+      e.preventDefault();
+      setShortcutsOpen(true);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   // Editor-style keyboard shortcuts when the scenes tab is active and an
   // item is selected. Shortcuts ignore focus-in-input/textarea so users can
@@ -4695,6 +4714,14 @@ export default function Home() {
                 🗑 Trash ({trashedAssets.length})
               </button>
             )}
+            <button
+              type="button"
+              onClick={() => setShortcutsOpen(true)}
+              className="mt-2 w-full text-xs px-2 py-1 border border-farm-wood/40 text-farm-parchment/60 hover:border-farm-grass hover:text-farm-grass"
+              title="Show keyboard shortcuts (press ?)"
+            >
+              ⌨ Shortcuts
+            </button>
           </>
         ) : rightTab === "scenes" ? (
           <ScenesView
@@ -4933,6 +4960,9 @@ export default function Home() {
             setOnboardingOpen(false);
           }}
         />
+      )}
+      {shortcutsOpen && (
+        <ShortcutsModal onClose={() => setShortcutsOpen(false)} />
       )}
       {shareToast && (
         <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2 border-2 border-farm-grass bg-farm-ink text-farm-grass text-sm shadow-lg">
@@ -5687,6 +5717,67 @@ function OnboardingModal({ onClose }: { onClose: () => void }) {
               Next →
             </button>
           )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ShortcutsModal({ onClose }: { onClose: () => void }) {
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onClose();
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 z-[65] bg-black/70 flex items-center justify-center p-4"
+      onClick={onClose}
+    >
+      <div
+        className="bg-farm-ink border-2 border-farm-wood w-full max-w-lg max-h-[80vh] overflow-y-auto p-6 space-y-4"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start justify-between">
+          <h2 className="font-pixel text-lg text-farm-grass leading-snug">⌨ Keyboard shortcuts</h2>
+          <button
+            onClick={onClose}
+            className="text-farm-parchment/70 hover:text-farm-parchment text-xl leading-none px-2 ml-2 shrink-0"
+            title="Close"
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+        <div className="space-y-4">
+          {SHORTCUTS.map((group) => (
+            <div key={group.title} className="space-y-1.5">
+              <h3 className="text-xs font-pixel text-farm-parchment uppercase tracking-wider opacity-80">
+                {group.title}
+              </h3>
+              <div className="border border-farm-wood/40">
+                {group.entries.map((entry, i) => (
+                  <div
+                    key={`${group.title}-${i}`}
+                    className={`flex items-center gap-3 px-2 py-1.5 text-xs ${
+                      i % 2 === 0 ? "bg-farm-ink/40" : ""
+                    }`}
+                  >
+                    <span className="font-mono text-farm-grass shrink-0 min-w-[10rem]">
+                      {entry.keys}
+                    </span>
+                    <span className="opacity-80">{entry.description}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
         </div>
       </div>
     </div>
