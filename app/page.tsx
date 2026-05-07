@@ -29,6 +29,7 @@ import { SceneCanvas, type CanvasAsset } from "./components/SceneCanvas";
 import { ScenePlayer } from "./components/ScenePlayer";
 import { ToastHost, toast } from "./components/ToastHost";
 import { ConfirmHost, confirm as confirmDialog } from "./components/ConfirmDialog";
+import { ContextMenu, type ContextMenuItem } from "./components/ContextMenu";
 import { Tooltip } from "./components/Tooltip";
 import { SHORTCUTS } from "./lib/shortcuts";
 import JSZip from "jszip";
@@ -482,6 +483,11 @@ export default function Home() {
   const [selectMode, setSelectMode] = useState(false);
   const [selectedAssetIds, setSelectedAssetIds] = useState<Set<string>>(new Set());
   const [assetSort, setAssetSort] = useState<"newest" | "oldest" | "name" | "type">("newest");
+  /** Cursor-anchored context menu raised by right-clicking an AssetCard.
+   *  Null when no menu is open. */
+  const [assetContextMenu, setAssetContextMenu] = useState<
+    { x: number; y: number; assetId: string } | null
+  >(null);
   const [openaiKey, setOpenaiKey] = useState("");
   /** Image generation provider selector. "openai" routes FORGE through
    *  `/api/generate` (gpt-image-1, ~$0.04/image); "fal" routes through
@@ -3828,6 +3834,25 @@ export default function Home() {
     });
   }
 
+  function duplicateAsset(id: string): string | null {
+    const src = assets[id];
+    if (!src) return null;
+    const newId = crypto.randomUUID();
+    const baseName = src.name || src.prompt;
+    setAssets((a) => ({
+      ...a,
+      [newId]: {
+        ...src,
+        id: newId,
+        name: `${baseName} (copy)`,
+        editedFrom: src.id,
+        createdAt: Date.now(),
+        trashedAt: undefined,
+      },
+    }));
+    return newId;
+  }
+
   function setAssetTags(id: string, tags: string[]) {
     setAssets((a) => {
       const cur = a[id];
@@ -4727,6 +4752,9 @@ export default function Home() {
                     selectMode={selectMode}
                     selected={selectedAssetIds.has(a.id)}
                     onToggleSelect={() => toggleAssetSelected(a.id)}
+                    onRequestContextMenu={(x, y) =>
+                      setAssetContextMenu({ x, y, assetId: a.id })
+                    }
                   />
                 ))}
               </div>
@@ -4998,6 +5026,63 @@ export default function Home() {
       )}
       <ToastHost />
       <ConfirmHost />
+      {assetContextMenu &&
+        (() => {
+          const a = assets[assetContextMenu.assetId];
+          if (!a) return null;
+          const items: ContextMenuItem[] = [
+            { emoji: "✏️", label: "Edit", onSelect: () => startInlineEdit(a) },
+            {
+              emoji: "⎘",
+              label: "Duplicate",
+              onSelect: () => {
+                const newId = duplicateAsset(a.id);
+                if (newId) toast({ message: "Asset duplicated.", kind: "success" });
+              },
+            },
+            ...(activeScene
+              ? [
+                  {
+                    emoji: "🎬",
+                    label: "Add to scene",
+                    onSelect: () => {
+                      addAssetToScene(
+                        activeScene.id,
+                        a.id,
+                        activeScene.width / 2,
+                        activeScene.height / 2
+                      );
+                      setRightTab("scenes");
+                    },
+                  } as ContextMenuItem,
+                ]
+              : []),
+            {
+              emoji: "🏷",
+              label: "Tag…",
+              onSelect: () => {
+                const raw = prompt("Add tags (comma-separated):", (a.tags || []).join(", "));
+                if (raw == null) return;
+                const tags = raw.split(",").map((s) => s.trim()).filter(Boolean);
+                setAssetTags(a.id, tags);
+              },
+            },
+            {
+              emoji: "🗑",
+              label: "Delete",
+              destructive: true,
+              onSelect: () => deleteAsset(a.id),
+            },
+          ];
+          return (
+            <ContextMenu
+              x={assetContextMenu.x}
+              y={assetContextMenu.y}
+              items={items}
+              onClose={() => setAssetContextMenu(null)}
+            />
+          );
+        })()}
     </main>
   );
 }
@@ -8382,6 +8467,7 @@ function AssetCard({
   selectMode,
   selected,
   onToggleSelect,
+  onRequestContextMenu,
 }: {
   asset: Asset;
   onDownloadPNG: () => void;
@@ -8410,6 +8496,8 @@ function AssetCard({
   selectMode: boolean;
   selected: boolean;
   onToggleSelect: () => void;
+  /** Right-click → open the cursor-anchored context menu in Home. */
+  onRequestContextMenu: (x: number, y: number) => void;
 }) {
   const [w, h] = parseSize(asset.sourceSize);
   const aspect = `${w} / ${h}`;
@@ -8500,6 +8588,15 @@ function AssetCard({
         onDragStart();
       }}
       onDragEnd={onDragEnd}
+      onContextMenu={(e) => {
+        // Preserve native menu inside actual editable surfaces (rename
+        // input, tag input, edit textarea) so users can still paste / spell-
+        // check there.
+        const t = e.target as HTMLElement;
+        if (t.closest("input, textarea")) return;
+        e.preventDefault();
+        onRequestContextMenu(e.clientX, e.clientY);
+      }}
     >
       {selectMode && (
         <button

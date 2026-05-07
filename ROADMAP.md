@@ -495,7 +495,7 @@ and pixel-art typography (no new font imports, no new color systems).
 
 ### Affordances
 
-- [ ] **Right-click context menu on assets** — right-clicking an
+- [x] **Right-click context menu on assets** — right-clicking an
       AssetCard opens a small menu (positioned at cursor, edge-clamped,
       dismisses on outside click or Escape) with: Edit, Duplicate, Add
       to scene (only if scene active), Tag…, Delete. Reuses existing
