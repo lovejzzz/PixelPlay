@@ -4660,10 +4660,22 @@ export default function Home() {
               </div>
             )}
             {recent.length === 0 ? (
-              <div className="opacity-60 text-center py-12">
-                <div className="text-6xl mb-3">🌱</div>
-                <p>{allAssets.length === 0 ? "Empty barn. Forge your first asset!" : "No assets match the filter."}</p>
-              </div>
+              allAssets.length === 0 ? (
+                <div className="my-4 mx-auto max-w-xs text-center px-6 py-8 border-2 border-dashed border-farm-wood/40 bg-farm-ink/30">
+                  <div className="text-7xl mb-3 leading-none">🎨</div>
+                  <p className="font-pixel text-sm text-farm-parchment mb-2">
+                    No assets yet — type a prompt to create one
+                  </p>
+                  <p className="text-xs opacity-70">
+                    Try “cozy cottage tile” or “farmer character” in the FORGE
+                    box on the left.
+                  </p>
+                </div>
+              ) : (
+                <div className="opacity-60 text-center py-12">
+                  <p>No assets match the filter.</p>
+                </div>
+              )
             ) : (
               <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
                 {recent.map((a) => (
@@ -6047,13 +6059,14 @@ function RecipesView({
   );
   if (list.length === 0) {
     return (
-      <div className="opacity-60 text-center py-12 text-sm">
-        <div className="text-6xl mb-3">📋</div>
-        <p>No recipes yet.</p>
-        <p className="text-xs mt-2 opacity-80">
-          Tweak the form, then click 💾 next to the Type buttons to save it
-          as a one-click recipe. Useful when you keep coming back to the
-          same prompt pattern.
+      <div className="my-4 mx-auto max-w-xs text-center px-6 py-8 border-2 border-dashed border-farm-wood/40 bg-farm-ink/30">
+        <div className="text-7xl mb-3 leading-none">📋</div>
+        <p className="font-pixel text-sm text-farm-parchment mb-2">
+          No recipes yet — save a prompt pattern
+        </p>
+        <p className="text-xs opacity-70">
+          Tweak the FORGE form, then click 💾 next to the Type buttons to
+          save it as a one-click recipe.
         </p>
       </div>
     );
@@ -6548,11 +6561,14 @@ function ScenesView({
 
   if (sceneList.length === 0) {
     return (
-      <div className="opacity-60 text-center py-12">
-        <div className="text-6xl mb-3">🎬</div>
-        <p>No scenes yet.</p>
-        <p className="text-xs mt-2">
-          Try Generate + 🪄 Split items + Auto-compose.
+      <div className="my-4 mx-auto max-w-xs text-center px-6 py-8 border-2 border-dashed border-farm-wood/40 bg-farm-ink/30">
+        <div className="text-7xl mb-3 leading-none">🎬</div>
+        <p className="font-pixel text-sm text-farm-parchment mb-2">
+          No scenes yet — compose your first one
+        </p>
+        <p className="text-xs opacity-70">
+          Forge a scene prompt with 🪄 Split items, or drag assets onto the
+          canvas after creating a new scene.
         </p>
       </div>
     );

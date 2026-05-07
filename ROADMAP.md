@@ -477,7 +477,7 @@ and pixel-art typography (no new font imports, no new color systems).
 
 ### Empty & loading states
 
-- [ ] **Empty state illustrations + CTAs** — when the asset gallery,
+- [x] **Empty state illustrations + CTAs** — when the asset gallery,
       scenes tab, or recipes tab is empty, show a friendly placeholder
       block: large pixel-art emoji (🎨 / 🎬 / 📋), a one-line headline
       ("No assets yet — type a prompt to create one"), and a sub-text
