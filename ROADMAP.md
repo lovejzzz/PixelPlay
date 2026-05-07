@@ -435,7 +435,7 @@ and pixel-art typography (no new font imports, no new color systems).
 
 ### Feedback & dialogs
 
-- [ ] **Toast notification system** — replace ad-hoc `alert()` calls
+- [x] **Toast notification system** — replace ad-hoc `alert()` calls
       across `app/page.tsx` with a styled toast queue. Component lives at
       `app/components/ToastHost.tsx` and renders a stacked column in the
       top-right corner. Each toast has a `kind: "info" | "success" |

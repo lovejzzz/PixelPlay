@@ -27,6 +27,7 @@ import type {
 } from "./lib/agentTools";
 import { SceneCanvas, type CanvasAsset } from "./components/SceneCanvas";
 import { ScenePlayer } from "./components/ScenePlayer";
+import { ToastHost, toast } from "./components/ToastHost";
 import JSZip from "jszip";
 import {
   estimateImageCost,
@@ -1507,14 +1508,14 @@ export default function Home() {
       try {
         const res = await fetch(`/api/share?id=${encodeURIComponent(id)}`);
         if (!res.ok) {
-          alert(`Couldn't load shared project (HTTP ${res.status}).`);
+          toast({ message: `Couldn't load shared project (HTTP ${res.status}).`, kind: "error" });
           return;
         }
         const blob = await res.blob();
         const file = new File([blob], `${id}.zip`, { type: "application/zip" });
         await importProject(file);
       } catch (err) {
-        alert(`Couldn't import shared project: ${err instanceof Error ? err.message : String(err)}`);
+        toast({ message: `Couldn't import shared project: ${err instanceof Error ? err.message : String(err)}`, kind: "error" });
       } finally {
         setImportingShared(false);
         // Clear the query param so a refresh doesn't re-trigger the import.
@@ -3016,7 +3017,7 @@ export default function Home() {
     });
     const data = await res.json();
     if (!res.ok) {
-      alert(`Replace failed: ${data.error || res.status}`);
+      toast({ message: `Replace failed: ${data.error || res.status}`, kind: "error" });
       return;
     }
     const url = (data.urls as string[])[0];
@@ -3456,12 +3457,12 @@ export default function Home() {
     try {
       res = await fetch("/api/share", { method: "POST", body: form });
     } catch (err) {
-      alert(`Couldn't reach share endpoint: ${err instanceof Error ? err.message : String(err)}`);
+      toast({ message: `Couldn't reach share endpoint: ${err instanceof Error ? err.message : String(err)}`, kind: "error" });
       return;
     }
     if (!res.ok) {
       const data = (await res.json().catch(() => ({}))) as { error?: string };
-      alert(data.error || `Share failed (HTTP ${res.status})`);
+      toast({ message: data.error || `Share failed (HTTP ${res.status})`, kind: "error" });
       return;
     }
     const data = (await res.json()) as { url: string; id: string };
@@ -3484,12 +3485,12 @@ export default function Home() {
     try {
       zip = await JSZip.loadAsync(file);
     } catch (err) {
-      alert(`Couldn't read zip: ${err instanceof Error ? err.message : String(err)}`);
+      toast({ message: `Couldn't read zip: ${err instanceof Error ? err.message : String(err)}`, kind: "error" });
       return;
     }
     const indexFile = zip.file("assets.index.json");
     if (!indexFile) {
-      alert("This zip doesn't have assets.index.json — is it a Pixel Play export?");
+      toast({ message: "This zip doesn't have assets.index.json — is it a Pixel Play export?", kind: "error" });
       return;
     }
     type IndexEntry = {
@@ -3512,7 +3513,7 @@ export default function Home() {
       assetIndex = JSON.parse(indexJson) as IndexEntry[];
       if (!Array.isArray(assetIndex)) throw new Error("not an array");
     } catch {
-      alert("assets.index.json is malformed");
+      toast({ message: "assets.index.json is malformed", kind: "error" });
       return;
     }
 
@@ -3734,13 +3735,15 @@ export default function Home() {
     setActiveSceneId(null);
     setSelectedSceneItemIds([]);
     const recipeCount = Object.keys(newRecipes).length;
-    alert(
-      `Imported "${newProj.name}" — ${Object.keys(newAssets).length} asset${
+    toast({
+      message: `Imported "${newProj.name}" — ${Object.keys(newAssets).length} asset${
         Object.keys(newAssets).length === 1 ? "" : "s"
       }, ${Object.keys(newScenes).length} scene${
         Object.keys(newScenes).length === 1 ? "" : "s"
-      }${recipeCount > 0 ? `, ${recipeCount} recipe${recipeCount === 1 ? "" : "s"}` : ""}.`
-    );
+      }${recipeCount > 0 ? `, ${recipeCount} recipe${recipeCount === 1 ? "" : "s"}` : ""}.`,
+      kind: "success",
+      emoji: "📥",
+    });
   }
 
   function downloadPNG(asset: Asset) {
@@ -4925,6 +4928,7 @@ export default function Home() {
           🔗 {shareToast}
         </div>
       )}
+      <ToastHost />
     </main>
   );
 }
@@ -7026,7 +7030,7 @@ function ScenesView({
                             previewAudioRef.current = null;
                             setPreviewingSoundId(null);
                           }
-                          alert("Couldn't play this audio URL. Check that it's reachable and a supported format.");
+                          toast({ message: "Couldn't play this audio URL. Check that it's reachable and a supported format.", kind: "error" });
                         };
                         previewAudioRef.current = a;
                         setPreviewingSoundId(selectedSceneItem.id);
@@ -7734,7 +7738,7 @@ function ScenesView({
               </button>
               <button
                 onClick={() => {
-                  alert("Retry coming soon — for now, type the failed item names into a new Item generation and use 'Add to scene'.");
+                  toast({ message: "Retry coming soon — for now, type the failed item names into a new Item generation and use 'Add to scene'.", kind: "info" });
                 }}
                 className="text-xs px-3 py-1 border border-farm-grass bg-farm-grass/20 text-farm-grass hover:bg-farm-grass/30"
               >
@@ -8419,9 +8423,10 @@ function AssetCard({
                   type="button"
                   onClick={(e) => {
                     e.stopPropagation();
-                    alert(
-                      "Re-roll coming soon. For now: ✏️ this asset and prompt 'each frame visibly different — distinct poses, varied detail per cell', or drop pose to 1×1."
-                    );
+                    toast({
+                      message: "Re-roll coming soon. For now: ✏️ this asset and prompt 'each frame visibly different — distinct poses, varied detail per cell', or drop pose to 1×1.",
+                      kind: "info",
+                    });
                     setVarietyExpanded(false);
                   }}
                   title="Regenerate this sheet (stub — feature coming)"
