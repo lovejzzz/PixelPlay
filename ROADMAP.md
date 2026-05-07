@@ -426,6 +426,112 @@ Let users share projects via a link and (optionally) co-edit in real time.
 
 ---
 
+## Phase 12 — UI/UX polish
+
+Ten focused items to make the app feel more cohesive, discoverable, and
+pleasant to use. Each is one cron-fire scoped — bound the diff tightly,
+match existing `farm-ink` / `farm-grass` / `farm-parchment` color tokens
+and pixel-art typography (no new font imports, no new color systems).
+
+### Feedback & dialogs
+
+- [ ] **Toast notification system** — replace ad-hoc `alert()` calls
+      across `app/page.tsx` with a styled toast queue. Component lives at
+      `app/components/ToastHost.tsx` and renders a stacked column in the
+      top-right corner. Each toast has a `kind: "info" | "success" |
+      "error"`, optional emoji prefix, ~3.5s auto-dismiss, click-to-
+      dismiss, fade-out animation. Expose a global `useToast()` hook (or
+      a `toast()` function via a module-level event bus) so any component
+      can fire one. Migrate the 6–10 existing `alert()` sites in
+      `app/page.tsx` to use it. Don't change `confirm()` — that's the
+      next item.
+
+- [ ] **Confirmation dialog component** — new `ConfirmDialog` modal
+      component matching the existing Settings/Trash modal styling
+      (centered, dark overlay, farm-wood border). Replaces browser
+      `confirm()` calls in destructive flows: clearAll, emptyTrash,
+      deleteProject, deleteScene, deleteRecipe. Supports `title`,
+      `body`, `confirmLabel` (red for destructive), `cancelLabel`,
+      and resolves a Promise. A `useConfirm()` hook wraps this so the
+      call sites stay one-liners (`if (await confirm({...})) ...`).
+
+### Discoverability
+
+- [ ] **Keyboard shortcuts help modal** — pressing `?` (Shift+/)
+      anywhere outside an input opens a modal listing every shortcut,
+      grouped by section: FORGE (Enter, ⌘+Enter, ↑/↓ history), Scene
+      editor (⌘+Z, ⌘+Shift+Z, middle-click pan, shift-click multi-
+      select), Play mode (WASD/arrows, E to interact). Also surfaces a
+      "⌨ Shortcuts" link in the footer for mouse-users. Source the list
+      from a single constant in `app/lib/shortcuts.ts` so the help text
+      can't drift from the actual handlers.
+
+- [ ] **Tooltip system** — new `app/components/Tooltip.tsx` wrapper that
+      shows a styled label after 600ms hover, positioned above/below the
+      target with edge clamping. Replaces the inconsistent `title=""`
+      attributes on icon buttons (the cost/storage indicators, scene
+      controls, AssetCard buttons, hierarchy buttons). Aria-friendly
+      (uses `aria-describedby`). Don't touch every `title` site — start
+      with the scene controls bar + AssetCard action row + header
+      indicators (~15 buttons total).
+
+### Empty & loading states
+
+- [ ] **Empty state illustrations + CTAs** — when the asset gallery,
+      scenes tab, or recipes tab is empty, show a friendly placeholder
+      block: large pixel-art emoji (🎨 / 🎬 / 📋), a one-line headline
+      ("No assets yet — type a prompt to create one"), and a sub-text
+      pointing at the next action. Use the same pattern as the existing
+      no-results state in the search bar but elevated (centered in the
+      empty area, padded). Pure CSS/JSX — no new images.
+
+- [ ] **Loading skeletons during generation** — while `busy` is true and
+      a generation is in flight, render 1–4 shimmer-placeholder cards
+      at the top of the asset gallery (count from the form's `n`
+      variants). CSS-only shimmer (animated linear-gradient over a
+      farm-ink box). Removed when the new asset cards arrive. Keeps the
+      gallery feeling alive instead of relying on the chat-bubble busy
+      indicator alone.
+
+### Affordances
+
+- [ ] **Right-click context menu on assets** — right-clicking an
+      AssetCard opens a small menu (positioned at cursor, edge-clamped,
+      dismisses on outside click or Escape) with: Edit, Duplicate, Add
+      to scene (only if scene active), Tag…, Delete. Reuses existing
+      mutators — `duplicateAsset` (new tiny helper if not present),
+      `deleteAsset`, the prompt() flow for tags, etc. Matches the
+      existing modal styling. Don't replace single-click behavior or
+      the existing in-card buttons.
+
+- [ ] **Asset preview on hover** — hovering an AssetCard for 400ms
+      pops up a 2.5× zoomed preview in a portal positioned next to the
+      card (left/right based on viewport edge). Useful for inspecting
+      tile or sprite-sheet detail without opening the asset. Dismisses
+      on mouseleave; suppressed when in select mode or while dragging.
+      Pure CSS scaling; no new image fetches.
+
+### Polish
+
+- [ ] **Animated transitions** — add small CSS transitions in three
+      places: (1) asset cards fade-in on mount (200ms opacity +
+      transform: translateY(4px) → 0), (2) modals slide-in (200ms
+      transform: translateY(-12px) → 0 with ease-out), (3) right-tab
+      switches cross-fade (150ms). All via CSS only — Tailwind
+      `transition-*` and a small `animate-fade-in` keyframe in the
+      global stylesheet. No new dependencies. `prefers-reduced-motion`
+      gates all of it.
+
+- [ ] **Asset gallery density toggle** — a small "▦ / ▤" button in the
+      gallery header (next to the sort dropdown) toggles between
+      "comfortable" (current 3-column layout, larger cards) and
+      "compact" (4-column, smaller cards, smaller fonts). Persisted to
+      localStorage as `pixelplay:gallery-density`. AssetCard accepts a
+      `density` prop and adjusts its inner padding/font-size only —
+      doesn't re-implement the layout. Defaults to comfortable.
+
+---
+
 ## When everything in every phase is checked
 
 - Append a "ALL PHASES COMPLETE" entry to `CRON-LOG.md` with the date.
