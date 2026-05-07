@@ -317,7 +317,7 @@ Make the project presentable and export-friendly for real game developers.
       with `x`, `y`, `width`, `height`, `name` (asset name), `type`
       (assetType). Triggers a JSON file download.
 
-- [ ] **Sprite atlas manifest in ZIP export** — when `exportProject` bundles
+- [x] **Sprite atlas manifest in ZIP export** — when `exportProject` bundles
       the ZIP, also write an `atlas.json` at the root. Format: array of entries
       `{assetId, name, assetType, file, frameWidth, frameHeight, cols, rows,
       pivotX, pivotY}` where pivot defaults to bottom-center (0.5, 1.0) for

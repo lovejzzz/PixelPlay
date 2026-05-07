@@ -2679,6 +2679,7 @@ export default function Home() {
     // Every asset as a PNG, plus a parallel .json with metadata (prompt, tags,
     // pose, type, etc.) so downstream tools can index them.
     const assetIndex: Array<Record<string, unknown>> = [];
+    const atlas: Array<Record<string, unknown>> = [];
     for (const asset of Object.values(project.assets)) {
       const fileName = `${asset.assetType}-${asset.id.slice(0, 8)}.png`;
       zip.file(`assets/${fileName}`, dataUrlToBytes(asset.rawUrl));
@@ -2696,8 +2697,25 @@ export default function Home() {
         tags: asset.tags || [],
         createdAt: asset.createdAt,
       });
+      const cols = asset.cols || 1;
+      const rows = asset.rows || 1;
+      const [imgW, imgH] = parseSize(asset.sourceSize);
+      const isCharacter = asset.assetType === "character" || asset.assetType === "creature";
+      atlas.push({
+        assetId: asset.id,
+        name: asset.name || asset.prompt,
+        assetType: asset.assetType,
+        file: `assets/${fileName}`,
+        frameWidth: Math.round(imgW / cols),
+        frameHeight: Math.round(imgH / rows),
+        cols,
+        rows,
+        pivotX: 0.5,
+        pivotY: isCharacter ? 1.0 : 0.5,
+      });
     }
     zip.file(`assets.index.json`, JSON.stringify(assetIndex, null, 2));
+    zip.file(`atlas.json`, JSON.stringify(atlas, null, 2));
 
     // Each scene with its composite + manifest, referencing the existing
     // assets/ folder (no duplicate PNGs).
