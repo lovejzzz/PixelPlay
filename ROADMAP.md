@@ -386,7 +386,7 @@ says "make me a cozy forest tileset" and the agent generates the assets.
       renders tool-call chips ("⚙ forge_asset: warrior elf…") inline.
       No structural refactor of FORGE form — agent chips appear above it.
 
-- [ ] **Agent executes tools** — when the stream emits a `forge_asset`
+- [x] **Agent executes tools** — when the stream emits a `forge_asset`
       tool event, the client calls `handleSubmit` with the tool's prompt
       and mode. `list_assets` returns the current `allAssets` snapshot as
       a JSON string back to the agent. `set_project_memory` calls the

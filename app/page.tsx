@@ -14,6 +14,11 @@ import {
 } from "./lib/userProfile";
 import { makeSeamless } from "./lib/seamless";
 import { rankBySimilarity } from "./lib/cosineSearch";
+import type {
+  ForgeAssetArgs,
+  SetProjectMemoryArgs,
+  ApplyRecipeArgs,
+} from "./lib/agentTools";
 import { SceneCanvas, type CanvasAsset } from "./components/SceneCanvas";
 import { ScenePlayer } from "./components/ScenePlayer";
 import JSZip from "jszip";
@@ -237,14 +242,15 @@ type RightTab = "assets" | "scenes" | "recipes";
 
 /** Concierge agent (Phase 10) — internal message representation rendered
  *  inside the agent drawer. Wire format sent to `/api/agent` is the
- *  OpenAI Chat Completions shape (`{role, content, tool_calls?}`); we
- *  flatten tool-calls into separate visual chips here so each gets its
- *  own row. Tool execution / `tool_result` rounds land in a follow-up
- *  roadmap item — `tool_call` chips are display-only for now. */
+ *  OpenAI Chat Completions shape (`{role, content}`); tool calls become
+ *  separate visual chips and tool results collapse into a synthesized
+ *  `user` message in the wire history (per the roadmap's "next user
+ *  message" design — see `streamAgentTurn`). */
 type AgentMsg =
   | { kind: "user"; text: string }
   | { kind: "assistant"; text: string; streaming?: boolean }
   | { kind: "tool_call"; id: string; name: string; args: unknown }
+  | { kind: "tool_result"; id: string; name: string; result: string }
   | { kind: "error"; text: string };
 
 // ----------------------------------------------------------- constants
@@ -473,13 +479,16 @@ export default function Home() {
   const [sceneClipboard, setSceneClipboard] = useState<SceneItem[]>([]);
   /** Concierge agent drawer at the bottom of the FORGE panel. Toggled by
    *  the 🤖 Agent button in the panel header. Streams from `/api/agent`
-   *  and renders user/assistant text + tool-call chips inline. Tool-call
-   *  execution lands in a follow-up roadmap item — for now the chips are
-   *  display-only. */
+   *  and renders user/assistant text + tool-call/tool-result chips inline.
+   *  forge_asset tool calls queue here and pop one at a time when the
+   *  FORGE form is idle (see useEffect below). */
   const [agentOpen, setAgentOpen] = useState(false);
   const [agentMessages, setAgentMessages] = useState<AgentMsg[]>([]);
   const [agentInput, setAgentInput] = useState("");
   const [agentBusy, setAgentBusy] = useState(false);
+  const [pendingAgentForges, setPendingAgentForges] = useState<
+    Array<{ prompt: string; mode: GenMode; quality?: Quality }>
+  >([]);
   const agentScrollRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -857,46 +866,142 @@ export default function Home() {
     return lines.join("\n\n");
   }
 
-  /** Send the current agent conversation to `/api/agent` and stream the
-   *  response. Each `delta` event appends to the in-flight assistant
-   *  message; each `tool_call` event renders an inline chip. Tool
-   *  execution itself is the next roadmap item — for this milestone the
-   *  chips are display-only. */
-  async function sendAgentMessage(text: string) {
-    const trimmed = text.trim();
-    if (!trimmed || agentBusy) return;
-    if (!openaiKey.trim()) {
-      setAgentMessages((m) => [
-        ...m,
-        { kind: "user", text: trimmed },
-        {
-          kind: "error",
-          text: "No OpenAI key. Open ⚙ Settings and paste your key.",
-        },
-      ]);
-      setAgentInput("");
-      return;
-    }
-    // Build wire-format history from the existing visual log. Tool-call
-    // chips are dropped from the wire request since we don't have
-    // tool_results yet — the OpenAI API rejects assistant tool_calls
-    // without a matching tool message. Once tool execution lands, this
-    // builder will round-trip both directions.
-    const wireHistory: Array<{ role: "user" | "assistant"; content: string }> = [];
-    for (const m of agentMessages) {
-      if (m.kind === "user") wireHistory.push({ role: "user", content: m.text });
+  /** Convert the visual agent log to OpenAI Chat-Completions wire format.
+   *  tool_call chips are dropped (we don't replay assistant tool_calls in
+   *  the wire — the simplified design surfaces tool results as a
+   *  synthesized user message instead, per the roadmap). tool_result
+   *  chips collapse into one user message per contiguous run. */
+  function buildWireFromLog(
+    log: AgentMsg[]
+  ): Array<{ role: "user" | "assistant"; content: string }> {
+    const wire: Array<{ role: "user" | "assistant"; content: string }> = [];
+    let pending: string[] = [];
+    const flush = () => {
+      if (pending.length === 0) return;
+      wire.push({ role: "user", content: `Tool results:\n${pending.join("\n")}` });
+      pending = [];
+    };
+    for (const m of log) {
+      if (m.kind === "tool_result") {
+        pending.push(`[${m.name}] ${m.result}`);
+        continue;
+      }
+      flush();
+      if (m.kind === "user") wire.push({ role: "user", content: m.text });
       else if (m.kind === "assistant" && m.text)
-        wireHistory.push({ role: "assistant", content: m.text });
+        wire.push({ role: "assistant", content: m.text });
     }
-    wireHistory.push({ role: "user", content: trimmed });
+    flush();
+    return wire;
+  }
 
+  /** Execute the tool calls the agent emitted in one turn. Returns
+   *  `{id, name, result}` per call — `result` is a short text summary
+   *  the agent reads back as feedback on the next turn. forge_asset
+   *  queues a request via `pendingAgentForges` (the FORGE form fires
+   *  asynchronously so the agent doesn't block on image generation);
+   *  the others run synchronously against the project state. */
+  async function executeAgentToolCalls(
+    calls: Array<{ id: string; name: string; args: unknown }>
+  ): Promise<Array<{ id: string; name: string; result: string }>> {
+    const out: Array<{ id: string; name: string; result: string }> = [];
+    const cur = projects[currentId];
+    for (const tc of calls) {
+      let result = "";
+      try {
+        const args = (tc.args && typeof tc.args === "object"
+          ? tc.args
+          : {}) as Record<string, unknown>;
+        if (tc.name === "forge_asset") {
+          const a = args as Partial<ForgeAssetArgs>;
+          const prompt = typeof a.prompt === "string" ? a.prompt.trim() : "";
+          const mode = a.mode;
+          if (
+            !prompt ||
+            (mode !== "character" && mode !== "item" && mode !== "scene")
+          ) {
+            result =
+              "Error: forge_asset requires `prompt` and `mode` (character|item|scene).";
+          } else {
+            const q =
+              a.quality === "low" ||
+              a.quality === "medium" ||
+              a.quality === "high"
+                ? a.quality
+                : undefined;
+            setPendingAgentForges((q2) => [...q2, { prompt, mode, quality: q }]);
+            result = `Queued ${mode} forge: "${prompt.slice(0, 80)}"${
+              q ? ` (${q})` : ""
+            }.`;
+          }
+        } else if (tc.name === "list_assets") {
+          const live = Object.values(cur?.assets || {}).filter(
+            (a) => !a.trashedAt
+          );
+          const slim = live.slice(0, 100).map((a) => ({
+            id: a.id,
+            name: a.name || a.prompt,
+            assetType: a.assetType,
+            prompt: a.prompt,
+          }));
+          result = JSON.stringify(slim);
+        } else if (tc.name === "set_project_memory") {
+          const a = args as Partial<SetProjectMemoryArgs>;
+          if (typeof a.memory !== "string") {
+            result = "Error: set_project_memory requires `memory` string.";
+          } else {
+            setProjectMemory(a.memory);
+            result = `Project memory updated (${Math.min(
+              a.memory.length,
+              PROJECT_MEMORY_CAP
+            )} chars).`;
+          }
+        } else if (tc.name === "apply_recipe") {
+          const a = args as Partial<ApplyRecipeArgs>;
+          const ref = typeof a.recipe === "string" ? a.recipe.trim() : "";
+          if (!ref) {
+            result = "Error: apply_recipe requires `recipe` (id or name).";
+          } else {
+            const recipes = cur?.recipes || {};
+            let recipe: Recipe | undefined = recipes[ref];
+            if (!recipe) {
+              const lower = ref.toLowerCase();
+              recipe = Object.values(recipes).find(
+                (r) => r.name.toLowerCase() === lower
+              );
+            }
+            if (recipe) {
+              applyRecipe(recipe.id);
+              result = `Applied recipe: ${recipe.name} (${recipe.mode}).`;
+            } else {
+              const names = Object.values(recipes).map((r) => r.name);
+              result = `No recipe matching "${ref}". Available: ${
+                names.length > 0 ? names.join(", ") : "none"
+              }.`;
+            }
+          }
+        } else {
+          result = `Unknown tool: ${tc.name}`;
+        }
+      } catch (err) {
+        result = `Tool error: ${err instanceof Error ? err.message : String(err)}`;
+      }
+      out.push({ id: tc.id, name: tc.name, result });
+    }
+    return out;
+  }
+
+  /** Stream one agent turn against `/api/agent`, render deltas + tool-call
+   *  chips into the visual log, and — if the turn emitted any tool calls
+   *  — execute them, append tool_result chips, and recurse with an
+   *  extended history. The route's 8-turn cap prevents runaway loops. */
+  async function streamAgentTurn(
+    history: Array<{ role: "user" | "assistant"; content: string }>
+  ) {
     setAgentMessages((m) => [
       ...m,
-      { kind: "user", text: trimmed },
       { kind: "assistant", text: "", streaming: true },
     ]);
-    setAgentInput("");
-    setAgentBusy(true);
 
     const appendAssistantDelta = (delta: string) => {
       setAgentMessages((m) => {
@@ -939,12 +1044,16 @@ export default function Home() {
       });
     };
 
+    let turnAssistantText = "";
+    const turnToolCalls: Array<{ id: string; name: string; args: unknown }> = [];
+    let errored = false;
+
     try {
       const res = await fetch("/api/agent", {
         method: "POST",
         headers: authHeaders(),
         body: JSON.stringify({
-          messages: wireHistory,
+          messages: history,
           projectContext: buildAgentProjectContext(),
         }),
       });
@@ -964,6 +1073,7 @@ export default function Home() {
             text: parsed || `Agent request failed (${res.status})`,
           },
         ]);
+        setAgentBusy(false);
         return;
       }
       const reader = res.body.getReader();
@@ -995,14 +1105,19 @@ export default function Home() {
               continue;
             }
             if (evt.type === "delta" && typeof evt.text === "string") {
+              turnAssistantText += evt.text;
               appendAssistantDelta(evt.text);
             } else if (evt.type === "tool_call") {
-              insertToolCall(evt.id || "", evt.name || "", evt.args);
+              const id = evt.id || "";
+              const name = evt.name || "";
+              turnToolCalls.push({ id, name, args: evt.args });
+              insertToolCall(id, name, evt.args);
             } else if (evt.type === "error") {
               setAgentMessages((m) => [
                 ...m,
                 { kind: "error", text: evt.message || "Agent error" },
               ]);
+              errored = true;
             }
           }
         }
@@ -1013,10 +1128,71 @@ export default function Home() {
         ...m,
         { kind: "error", text: `Agent stream failed: ${msg}` },
       ]);
+      errored = true;
     } finally {
       finalizeAssistant();
-      setAgentBusy(false);
     }
+
+    if (errored || turnToolCalls.length === 0) {
+      setAgentBusy(false);
+      return;
+    }
+
+    // Execute the turn's tool calls, render tool_result chips, then
+    // recurse with the results threaded in as a synthesized user message.
+    const results = await executeAgentToolCalls(turnToolCalls);
+    setAgentMessages((m) => [
+      ...m,
+      ...results.map(
+        (r) =>
+          ({
+            kind: "tool_result",
+            id: r.id,
+            name: r.name,
+            result: r.result,
+          }) as AgentMsg
+      ),
+    ]);
+    const followUp: Array<{ role: "user" | "assistant"; content: string }> = [
+      ...history,
+    ];
+    if (turnAssistantText.trim()) {
+      followUp.push({ role: "assistant", content: turnAssistantText });
+    }
+    followUp.push({
+      role: "user",
+      content: `Tool results:\n${results
+        .map((r) => `[${r.name}] ${r.result}`)
+        .join("\n")}`,
+    });
+    await streamAgentTurn(followUp);
+  }
+
+  /** Send a user-typed agent message: pushes a user chip into the visual
+   *  log, builds wire history from the prior log, and kicks off the
+   *  streaming turn loop. Tool-call/result rounds are handled by
+   *  `streamAgentTurn` via tail recursion. */
+  async function sendAgentMessage(text: string) {
+    const trimmed = text.trim();
+    if (!trimmed || agentBusy) return;
+    if (!openaiKey.trim()) {
+      setAgentMessages((m) => [
+        ...m,
+        { kind: "user", text: trimmed },
+        {
+          kind: "error",
+          text: "No OpenAI key. Open ⚙ Settings and paste your key.",
+        },
+      ]);
+      setAgentInput("");
+      return;
+    }
+    const wireHistory = buildWireFromLog(agentMessages);
+    wireHistory.push({ role: "user", content: trimmed });
+    setAgentMessages((m) => [...m, { kind: "user", text: trimmed }]);
+    setAgentInput("");
+    setAgentBusy(true);
+    await streamAgentTurn(wireHistory);
   }
 
   /** Pick the image-gen endpoint + headers based on the user's provider
@@ -1394,6 +1570,19 @@ export default function Home() {
     // handleSubmit is a stable closure over the latest state in this render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingSubmitPrompt, openaiKey, falKey, busy]);
+
+  // Pop the next agent-queued forge when the FORGE form is idle. Sets the
+  // form's mode/quality first, then triggers handleSubmit via the existing
+  // pendingSubmitPrompt replay path (so the no-key Settings popup still works).
+  useEffect(() => {
+    if (busy || pendingSubmitPrompt) return;
+    if (pendingAgentForges.length === 0) return;
+    const [head, ...rest] = pendingAgentForges;
+    setPendingAgentForges(rest);
+    setGenMode(head.mode);
+    if (head.quality) setQuality(head.quality);
+    setPendingSubmitPrompt(head.prompt);
+  }, [busy, pendingSubmitPrompt, pendingAgentForges]);
 
   // ------------- handlers -------------
 
@@ -5368,6 +5557,18 @@ function AgentDrawer({
                 <span className="px-2 py-0.5 bg-farm-sky/15 border border-farm-sky/60 text-farm-sky font-mono">
                   ⚙ {m.name}
                   {preview ? `: ${preview}` : ""}
+                </span>
+              </div>
+            );
+          }
+          if (m.kind === "tool_result") {
+            const preview = m.result.length > 80
+              ? `${m.result.slice(0, 80)}…`
+              : m.result;
+            return (
+              <div key={i} className="flex justify-start">
+                <span className="px-2 py-0.5 bg-farm-grass/10 border border-farm-grass/40 text-farm-grass/90 font-mono">
+                  ↳ {m.name}: {preview}
                 </span>
               </div>
             );
