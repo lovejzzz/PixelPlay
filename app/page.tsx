@@ -31,6 +31,7 @@ import { ToastHost, toast } from "./components/ToastHost";
 import { ConfirmHost, confirm as confirmDialog } from "./components/ConfirmDialog";
 import { ContextMenu, type ContextMenuItem } from "./components/ContextMenu";
 import { Tooltip } from "./components/Tooltip";
+import { AssetHoverPreview } from "./components/AssetHoverPreview";
 import { SHORTCUTS } from "./lib/shortcuts";
 import JSZip from "jszip";
 import {
@@ -8507,6 +8508,8 @@ function AssetCard({
   const [editingName, setEditingName] = useState(false);
   const [varietyExpanded, setVarietyExpanded] = useState(false);
   const [editExampleIdx, setEditExampleIdx] = useState(0);
+  const cardRef = useRef<HTMLDivElement>(null);
+  const [dragging, setDragging] = useState(false);
 
   // Rotate through example edit phrasings as the placeholder while the
   // inline edit panel is open and the user hasn't typed anything yet.
@@ -8563,6 +8566,7 @@ function AssetCard({
 
   return (
     <div
+      ref={cardRef}
       className={`group bg-farm-ink/60 border-2 p-2 flex flex-col gap-2 relative ${
         selectMode && selected
           ? "border-farm-grass ring-2 ring-farm-grass/40"
@@ -8585,9 +8589,13 @@ function AssetCard({
         }
         e.dataTransfer.setData("application/x-pwf-asset-id", asset.id);
         e.dataTransfer.effectAllowed = "copy";
+        setDragging(true);
         onDragStart();
       }}
-      onDragEnd={onDragEnd}
+      onDragEnd={() => {
+        setDragging(false);
+        onDragEnd();
+      }}
       onContextMenu={(e) => {
         // Preserve native menu inside actual editable surfaces (rename
         // input, tag input, edit textarea) so users can still paste / spell-
@@ -8900,6 +8908,13 @@ function AssetCard({
           )}
         </div>
       </div>
+      <AssetHoverPreview
+        targetRef={cardRef}
+        src={asset.pixelUrl}
+        alt={asset.prompt}
+        isTile={isTile}
+        suppressed={selectMode || dragging || editing}
+      />
     </div>
   );
 }

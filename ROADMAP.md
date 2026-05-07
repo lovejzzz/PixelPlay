@@ -504,7 +504,7 @@ and pixel-art typography (no new font imports, no new color systems).
       existing modal styling. Don't replace single-click behavior or
       the existing in-card buttons.
 
-- [ ] **Asset preview on hover** — hovering an AssetCard for 400ms
+- [x] **Asset preview on hover** — hovering an AssetCard for 400ms
       pops up a 2.5× zoomed preview in a portal positioned next to the
       card (left/right based on viewport edge). Useful for inspecting
       tile or sprite-sheet detail without opening the asset. Dismisses
