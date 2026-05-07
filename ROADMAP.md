@@ -446,7 +446,7 @@ and pixel-art typography (no new font imports, no new color systems).
       `app/page.tsx` to use it. Don't change `confirm()` — that's the
       next item.
 
-- [ ] **Confirmation dialog component** — new `ConfirmDialog` modal
+- [x] **Confirmation dialog component** — new `ConfirmDialog` modal
       component matching the existing Settings/Trash modal styling
       (centered, dark overlay, farm-wood border). Replaces browser
       `confirm()` calls in destructive flows: clearAll, emptyTrash,

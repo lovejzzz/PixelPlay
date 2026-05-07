@@ -28,6 +28,7 @@ import type {
 import { SceneCanvas, type CanvasAsset } from "./components/SceneCanvas";
 import { ScenePlayer } from "./components/ScenePlayer";
 import { ToastHost, toast } from "./components/ToastHost";
+import { ConfirmHost, confirm as confirmDialog } from "./components/ConfirmDialog";
 import JSZip from "jszip";
 import {
   estimateImageCost,
@@ -3870,10 +3871,15 @@ export default function Home() {
     });
   }
 
-  function clearAll() {
+  async function clearAll() {
     const count = Object.values(assets).filter((a) => !a.trashedAt).length;
     if (count === 0) return;
-    if (!confirm(`Move all ${count} assets in "${currentProject?.name}" to trash?`)) return;
+    const ok = await confirmDialog({
+      title: "Move all assets to trash?",
+      body: `${count} asset${count > 1 ? "s" : ""} in "${currentProject?.name}" will be moved to trash. You can restore them until you reload the page.`,
+      confirmLabel: "Move to trash",
+    });
+    if (!ok) return;
     const now = Date.now();
     setAssets((a) => {
       const next: Record<string, Asset> = {};
@@ -4906,9 +4912,14 @@ export default function Home() {
           trashed={trashedAssets}
           onClose={() => setTrashOpen(false)}
           onRestore={(id) => restoreAsset(id)}
-          onEmpty={() => {
+          onEmpty={async () => {
             if (trashedAssets.length === 0) return;
-            if (!confirm(`Permanently delete ${trashedAssets.length} asset${trashedAssets.length > 1 ? "s" : ""}?`)) return;
+            const ok = await confirmDialog({
+              title: "Empty trash?",
+              body: `Permanently delete ${trashedAssets.length} asset${trashedAssets.length > 1 ? "s" : ""}. Scenes still referencing them will lose those items.`,
+              confirmLabel: "Empty trash",
+            });
+            if (!ok) return;
             emptyTrash();
             setTrashOpen(false);
           }}
@@ -4929,6 +4940,7 @@ export default function Home() {
         </div>
       )}
       <ToastHost />
+      <ConfirmHost />
     </main>
   );
 }
@@ -4968,9 +4980,14 @@ function ProjectSwitcher({
     const name = prompt("Rename project:", current?.name)?.trim();
     if (name) onRename(name);
   }
-  function handleDelete() {
+  async function handleDelete() {
     if (!current) return;
-    if (!confirm(`Delete project "${current.name}" and all its assets?`)) return;
+    const ok = await confirmDialog({
+      title: "Delete project?",
+      body: `"${current.name}" and all of its assets, scenes, and recipes will be removed. This cannot be undone.`,
+      confirmLabel: "Delete project",
+    });
+    if (!ok) return;
     onDelete();
   }
 
@@ -5976,8 +5993,13 @@ function RecipesView({
             </button>
             <button
               type="button"
-              onClick={() => {
-                if (confirm(`Delete recipe "${r.name}"?`)) onDelete(r.id);
+              onClick={async () => {
+                const ok = await confirmDialog({
+                  title: "Delete recipe?",
+                  body: `"${r.name}" will be removed from this project.`,
+                  confirmLabel: "Delete recipe",
+                });
+                if (ok) onDelete(r.id);
               }}
               title="Delete recipe"
               className="text-xs px-1.5 py-0.5 border border-farm-wood/60 hover:border-red-700 hover:text-red-300"
@@ -6541,8 +6563,13 @@ function ScenesView({
             </button>
             <button
               type="button"
-              onClick={() => {
-                if (confirm(`Delete scene "${activeScene.name}"?`)) onDeleteScene(activeScene.id);
+              onClick={async () => {
+                const ok = await confirmDialog({
+                  title: "Delete scene?",
+                  body: `"${activeScene.name}" and all of its placed items will be removed.`,
+                  confirmLabel: "Delete scene",
+                });
+                if (ok) onDeleteScene(activeScene.id);
               }}
               className="px-2 py-1 border border-farm-wood/60 hover:border-red-700 hover:text-red-300 text-xs"
             >
