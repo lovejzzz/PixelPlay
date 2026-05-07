@@ -400,7 +400,7 @@ says "make me a cozy forest tileset" and the agent generates the assets.
 
 Let users share projects via a link and (optionally) co-edit in real time.
 
-- [ ] **Project share link — upload** — new `/api/share/route.ts` that
+- [x] **Project share link — upload** — new `/api/share/route.ts` that
       accepts a multipart ZIP body (same format as exportProject), stores
       it in Vercel Blob (`@vercel/blob`) with a random UUID key, and
       returns `{url, id}`. Button "🔗 Share link" appears next to

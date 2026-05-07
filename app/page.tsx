@@ -456,6 +456,7 @@ export default function Home() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [trashOpen, setTrashOpen] = useState(false);
   const [onboardingOpen, setOnboardingOpen] = useState(false);
+  const [shareToast, setShareToast] = useState<string | null>(null);
   /** Multi-select mode for the gallery. When ON, AssetCards show a corner
    *  checkbox; when 1+ are selected, a bulk-action bar appears. */
   const [selectMode, setSelectMode] = useState(false);
@@ -3121,9 +3122,9 @@ export default function Home() {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
-  async function exportProject() {
+  async function buildProjectZipBlob(): Promise<{ blob: Blob; slug: string } | null> {
     const project = projects[currentId];
-    if (!project) return;
+    if (!project) return null;
     const zip = new JSZip();
     const projectSlug = slugify(project.name);
 
@@ -3292,12 +3293,47 @@ export default function Home() {
     }
 
     const blob = await zip.generateAsync({ type: "blob" });
-    const url = URL.createObjectURL(blob);
+    return { blob, slug: projectSlug };
+  }
+
+  async function exportProject() {
+    const built = await buildProjectZipBlob();
+    if (!built) return;
+    const url = URL.createObjectURL(built.blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `${projectSlug}.zip`;
+    a.download = `${built.slug}.zip`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  /** Builds the project zip in the browser, POSTs it as multipart/form-data
+   *  to /api/share, and copies the returned public URL to the clipboard. */
+  async function shareProject() {
+    const built = await buildProjectZipBlob();
+    if (!built) return;
+    const form = new FormData();
+    form.append("file", built.blob, `${built.slug}.zip`);
+    let res: Response;
+    try {
+      res = await fetch("/api/share", { method: "POST", body: form });
+    } catch (err) {
+      alert(`Couldn't reach share endpoint: ${err instanceof Error ? err.message : String(err)}`);
+      return;
+    }
+    if (!res.ok) {
+      const data = (await res.json().catch(() => ({}))) as { error?: string };
+      alert(data.error || `Share failed (HTTP ${res.status})`);
+      return;
+    }
+    const data = (await res.json()) as { url: string; id: string };
+    try {
+      await navigator.clipboard.writeText(data.url);
+      setShareToast("Link copied!");
+    } catch {
+      setShareToast(`Share link: ${data.url}`);
+    }
+    setTimeout(() => setShareToast(null), 3000);
   }
 
   /** Inverse of exportProject. Reads a `.zip` produced by Export and creates
@@ -3866,6 +3902,7 @@ export default function Home() {
                   onRename={renameCurrentProject}
                   onDelete={deleteCurrentProject}
                   onExport={exportProject}
+                  onShare={shareProject}
                   onImport={importProject}
                 />
                 <button
@@ -4735,6 +4772,11 @@ export default function Home() {
           }}
         />
       )}
+      {shareToast && (
+        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2 border-2 border-farm-grass bg-farm-ink text-farm-grass text-sm shadow-lg">
+          🔗 {shareToast}
+        </div>
+      )}
     </main>
   );
 }
@@ -4749,6 +4791,7 @@ function ProjectSwitcher({
   onRename,
   onDelete,
   onExport,
+  onShare,
   onImport,
 }: {
   projects: Record<string, Project>;
@@ -4758,6 +4801,7 @@ function ProjectSwitcher({
   onRename: (name: string) => void;
   onDelete: () => void;
   onExport: () => void;
+  onShare: () => void;
   onImport: (file: File) => void;
 }) {
   const importInputRef = useRef<HTMLInputElement>(null);
@@ -4815,6 +4859,14 @@ function ProjectSwitcher({
         className="px-1.5 py-0.5 border border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass"
       >
         ⬇
+      </button>
+      <button
+        type="button"
+        onClick={onShare}
+        title="Share link — uploads project zip and copies a public URL"
+        className="px-1.5 py-0.5 border border-farm-wood/60 hover:border-farm-grass hover:text-farm-grass"
+      >
+        🔗
       </button>
       <button
         type="button"
