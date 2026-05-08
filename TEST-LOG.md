@@ -99,3 +99,18 @@ Fix (this fire):
 - Rewrote the plural-detection heuristic in `scripts/test-refine.mjs` to inspect ONLY the LAST word of each item (the head noun). The previous regex matched any plural-looking word starting from the head — so material adjectives like brass / glass / grass appearing mid-string fired the flag. New version: split on whitespace, take last word, check it ends in -s; skip -ss / -us / -is endings (matches the route's singularize() skip-rule); skip the 16 plurale-tantum nouns (tongs, scissors, glasses, etc.). 13 unit cases pass: "a brass steering wheel" / "a glass jar" / "a moss-covered rock" / "a wooden mass" / "an iron axis" / "a small cactus" all return false; "a set of plates" / "a pair of boots" / "a pile of bones" / "a basket of apples" return true.
 
 Build: clean.
+
+## 2026-05-08 fire #9
+
+Scenario: a cozy bedroom
+
+LLM output (gpt-4o-mini, 1.9 s):
+- context: interior
+- items: a bed with blankets, a nightstand, a reading lamp, a plush rug, a wooden wardrobe
+
+Heuristic flagged: `plural_suspects: "a bed with blankets"`. Same false-positive class as fire #8 ("a brass steering wheel") but in compound-descriptor form. The asset's head noun is "bed"; "with blankets" is a modifier — and modifiers after a connector are often legitimately plural ("blankets", "vines", "flowers"). The route's image prompt becomes "single bed with blankets" which renders correctly as one bed.
+
+Fix (this fire):
+- Extended the plural-detection heuristic in `scripts/test-refine.mjs` to skip items containing compound-descriptor connectors: ` with `, ` covered in `, ` covered with `, ` full of `, ` filled with `, ` of `. When a connector is present, the head noun comes BEFORE it; the last word is just a modifier and shouldn't drive the plural flag. 14 unit cases pass: compound forms like "a bed with blankets" / "a chair covered in vines" / "a basket of apples" / "a bowl full of fruit" / "a vase filled with flowers" all return false; bare plurals like "plates" / "several mushrooms" still return true.
+
+Build: clean.

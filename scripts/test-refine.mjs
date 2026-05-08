@@ -173,7 +173,14 @@ if (collectiveSuspects.length) issues.push(`collective noun: ${collectiveSuspect
 // flagged the whole item as a plural suspect.
 const plurals = items.filter((x) => {
   if (typeof x !== "string") return false;
-  const parts = x.trim().split(/\s+/);
+  const s = x.trim();
+  // Compound-descriptor patterns put the head BEFORE the connector and
+  // a (often legitimately plural) modifier AFTER. Examples: "a bed with
+  // blankets", "a chair covered in vines", "a basket of apples", "a bowl
+  // full of fruit". The plural-looking last word is a modifier, not the
+  // asset's head noun, so don't flag the item.
+  if (/\s(with|covered in|covered with|full of|filled with|of)\s/i.test(s)) return false;
+  const parts = s.split(/\s+/);
   const last = (parts[parts.length - 1] || "").toLowerCase();
   if (!/\w+s$/.test(last)) return false;
   // Words ending in -ss / -us / -is aren't plurals (matches the route's
