@@ -63,3 +63,5 @@ Fix (this fire):
 - Extended the IRREGULAR map in `singularize()` (app/api/generate/route.ts) with 16 plurale-tantum nouns common in game props: tongs, scissors, pliers, tweezers, shears, pincers, glasses, sunglasses, goggles, binoculars, pants, jeans, shorts, trousers, pajamas, headphones. Each maps to itself, so the singularizer leaves them unchanged. End result: "a set of tongs" → strip "set of" → "tongs" → IRREGULAR lookup → "tongs" → image prompt "single tongs" → renders as one pair.
 
 Build: clean.
+
+2026-05-08 fire #5 — PASS — Scenario: a top-down view of a small town — a wooden house, a brick shop, a small park bench, a street lamp, a single tree, a fountain
