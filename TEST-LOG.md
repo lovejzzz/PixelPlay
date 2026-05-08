@@ -46,3 +46,5 @@ Fix (this fire):
 - Updated `scripts/test-refine.mjs` so the harness no longer flags "bunch of" as a collective-noun issue (matches the new policy).
 
 Build: clean.
+
+2026-05-08 fire #3 — PASS — Scenario: an abandoned subway tunnel — a rusty train car, a broken light fixture, a cracked concrete wall, a discarded backpack, a single rat, a metal pipe
