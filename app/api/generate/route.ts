@@ -515,6 +515,25 @@ function singularize(s: string): string {
     fish: "fish",
     sheep: "sheep",
     deer: "deer",
+    // Plurale tantum: grammatically plural but semantically ONE item. The
+    // tool/garment IS the pair; "a tong" / "a scissor" / "a pant" are wrong.
+    // Map them to themselves so "a set of tongs" → strip → "tongs" → "tongs".
+    tongs: "tongs",
+    scissors: "scissors",
+    pliers: "pliers",
+    tweezers: "tweezers",
+    shears: "shears",
+    pincers: "pincers",
+    glasses: "glasses",
+    sunglasses: "sunglasses",
+    goggles: "goggles",
+    binoculars: "binoculars",
+    pants: "pants",
+    jeans: "jeans",
+    shorts: "shorts",
+    trousers: "trousers",
+    pajamas: "pajamas",
+    headphones: "headphones",
   };
   if (IRREGULAR[lower]) {
     parts[parts.length - 1] = matchCase(head, IRREGULAR[lower]);

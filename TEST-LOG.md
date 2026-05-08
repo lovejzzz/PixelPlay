@@ -48,3 +48,18 @@ Fix (this fire):
 Build: clean.
 
 2026-05-08 fire #3 — PASS — Scenario: an abandoned subway tunnel — a rusty train car, a broken light fixture, a cracked concrete wall, a discarded backpack, a single rat, a metal pipe
+
+## 2026-05-08 fire #4
+
+Scenario: a medieval blacksmith's forge
+
+LLM output (gpt-4o-mini, 2.8 s):
+- context: interior
+- items: a wooden workbench, an anvil, a hammer, a set of tongs, a forge bellows, a metal bucket
+
+Issue: "a set of tongs". Sanitizer would strip "set of" → "tongs" → singularize → "tong" — but "tong" is not a real noun. Tongs are a *plurale tantum*: grammatically plural but semantically one tool (you cannot have one tong, a tong is half a tongs).
+
+Fix (this fire):
+- Extended the IRREGULAR map in `singularize()` (app/api/generate/route.ts) with 16 plurale-tantum nouns common in game props: tongs, scissors, pliers, tweezers, shears, pincers, glasses, sunglasses, goggles, binoculars, pants, jeans, shorts, trousers, pajamas, headphones. Each maps to itself, so the singularizer leaves them unchanged. End result: "a set of tongs" → strip "set of" → "tongs" → IRREGULAR lookup → "tongs" → image prompt "single tongs" → renders as one pair.
+
+Build: clean.
