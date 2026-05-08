@@ -384,7 +384,7 @@ async function extractScene(
   const sys =
     "You parse a short scene description into a list of distinct, individually-renderable 2D game-asset items.\n\n" +
     "RULE: every item must pass the COLLECTIBLE TEST — could a video-game character pick this up, walk around it, or place it in an inventory? A bed YES, a tombstone YES, a single skull YES, a treasure chest YES. The MOON no, FOG no, OCEAN WAVES no, SCATTERED BONES no (use 'a skull' instead), GROUND no (it IS the ground), SHADOW no, A SCHOOL OF FISH no (use 'one fish'), DIRT no, GRASS no (that's the background tile, not an item), SAND / SANDY BEACH no (the sand is the ground, like grass), WATER / RIVER / LAKE SURFACE no (the water is the ground/backdrop). Use 'a single seashell', 'one cactus', 'a wooden boat' instead.\n\n" +
-    "RULE: NO COLLECTIVE NOUNS. 'A set of chairs' NO → 'a wooden chair'. 'A pair of boots' NO → 'one leather boot'. 'A bunch of carrots' borderline — only OK if drawn as one tied bunch. 'A pile of X' only OK if it visually reads as one mound (a pile of hay = ok, a pile of snowballs = no, just say 'a snowball').\n\n" +
+    "RULE: NO COLLECTIVE NOUNS for distinct objects. 'A set of chairs' NO → 'a wooden chair'. 'A pair of boots' NO → 'one leather boot'. 'A flock of birds' NO → 'one sparrow'. EXCEPTION: tied-bundle phrases that read as ONE physical asset are fine — 'a bunch of carrots' (one bundle), 'a bunch of keys' (one keyring), 'a basket of apples' (one basket), 'a crate of bottles' (one crate). 'A pile of X' only OK if it visually reads as one mound (a pile of hay = ok, a pile of snowballs = no, just say 'a snowball').\n\n" +
     "STEP 1 — pick exactly one CONTEXT:\n" +
     " • interior — INSIDE a room/building. Items are furniture and props.\n" +
     " • exterior — OUTSIDE in a landscape/streetscape. Items are buildings, trees, rocks, signs, ground props.\n" +
@@ -472,7 +472,11 @@ function sanitizeItemDescriptor(raw: string): string | null {
   // pair when the plural is fed in, even with a "single" prefix. Use a
   // small irregular-plural map first; fall back to a conservative "drop
   // trailing s" rule.
-  const COLLECTIVE_RE = /^(a |an )?(set|pair|bunch|group|school|flock|herd|cluster) of (.+)$/i;
+  // "bunch" is intentionally NOT in the strip list. "A bunch of carrots" or
+  // "a bunch of keys" reads as ONE asset (a tied bundle / a keyring) and the
+  // image-gen prompt's "single " prefix yields a clean "single bunch of
+  // carrots" — which renders as one cluster, not as separate carrots.
+  const COLLECTIVE_RE = /^(a |an )?(set|pair|group|school|flock|herd|cluster) of (.+)$/i;
   const m = s.match(COLLECTIVE_RE);
   if (m) {
     s = singularize(m[3]);

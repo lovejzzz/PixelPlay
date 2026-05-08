@@ -160,7 +160,9 @@ const nonArticle = items.filter((x) => typeof x === "string" && !startsWithArtic
 if (nonArticle.length) issues.push(`bad article prefix: ${nonArticle.join(", ")}`);
 const overlong = items.filter((x) => typeof x === "string" && x.split(/\s+/).length > 6);
 if (overlong.length) issues.push(`item too long (>6 words): ${overlong.join(", ")}`);
-const collectiveSuspects = items.filter((x) => /\b(set of|pair of|bunch of|group of|cluster of|stack of|pile of)\b/i.test(x || ""));
+// "bunch of X" is allowed as a single tied-bundle asset (carrots, keys,
+// balloons, etc.) — only flag stricter collectives that mean "many objects".
+const collectiveSuspects = items.filter((x) => /\b(set of|pair of|group of|cluster of|stack of|pile of)\b/i.test(x || ""));
 if (collectiveSuspects.length) issues.push(`collective noun: ${collectiveSuspects.join(", ")}`);
 const plurals = items.filter((x) =>
   /^(a |an |one |two |three |four |five )?\w+s\b/i.test(x || "") &&
