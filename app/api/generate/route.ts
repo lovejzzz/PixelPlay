@@ -466,19 +466,81 @@ function sanitizeItemDescriptor(raw: string): string | null {
   ];
   if (BACKDROPS.includes(stripped)) return null;
 
-  // Strip leading collective-noun phrases. We don't try to singularize the
-  // noun (regex pluralization is unreliable — "knives" → "knive"); the
-  // image-generation prompt prefixes "single" anyway, so "single knives"
-  // yields one knife. The point is just to drop the multi-instance framing.
+  // Strip leading collective-noun phrases. After stripping, also try to
+  // singularize the head noun — "a pair of snowshoes" → "snowshoes" →
+  // "snowshoe" — because in practice gpt-image-1 still tends to draw a
+  // pair when the plural is fed in, even with a "single" prefix. Use a
+  // small irregular-plural map first; fall back to a conservative "drop
+  // trailing s" rule.
   const COLLECTIVE_RE = /^(a |an )?(set|pair|bunch|group|school|flock|herd|cluster) of (.+)$/i;
   const m = s.match(COLLECTIVE_RE);
   if (m) {
-    // Drop the article entirely — the image prompt's "single" prefix will
-    // supply quantity, and "single a chairs" reads worse than "single chairs".
-    s = m[3];
+    s = singularize(m[3]);
   }
   s = s.replace(/^scattered\s+/i, "single ");
   return s;
+}
+
+/** Best-effort plural→singular for the head noun of a stripped collective.
+ *  Handles common irregulars; otherwise drops a trailing "s" only when
+ *  doing so leaves a plausible word (skips "grass", "glass", "moss", etc.). */
+function singularize(s: string): string {
+  const trimmed = s.trim();
+  // Operate on the LAST whitespace-separated word, since the head is usually
+  // last ("leather boots" → singularize "boots" only).
+  const parts = trimmed.split(/\s+/);
+  const head = parts[parts.length - 1];
+  const lower = head.toLowerCase();
+
+  const IRREGULAR: Record<string, string> = {
+    knives: "knife",
+    leaves: "leaf",
+    wolves: "wolf",
+    elves: "elf",
+    loaves: "loaf",
+    mice: "mouse",
+    men: "man",
+    women: "woman",
+    children: "child",
+    feet: "foot",
+    teeth: "tooth",
+    geese: "goose",
+    oxen: "ox",
+    cacti: "cactus",
+    fungi: "fungus",
+    fish: "fish",
+    sheep: "sheep",
+    deer: "deer",
+  };
+  if (IRREGULAR[lower]) {
+    parts[parts.length - 1] = matchCase(head, IRREGULAR[lower]);
+    return parts.join(" ");
+  }
+  // Words ending in -ss/-us/-is don't get pluralized by trimming s.
+  if (/(ss|us|is)$/i.test(head)) return trimmed;
+  // "berries" → "berry"
+  if (/[^aeiou]ies$/i.test(head)) {
+    parts[parts.length - 1] = matchCase(head, head.slice(0, -3) + "y");
+    return parts.join(" ");
+  }
+  // "boxes" / "bushes" / "watches" → drop "es"
+  if (/(xes|shes|ches|sses|zzes)$/i.test(head)) {
+    parts[parts.length - 1] = matchCase(head, head.slice(0, -2));
+    return parts.join(" ");
+  }
+  // Generic: ends in 's' and isn't already in our skip list. Drop the s.
+  if (/s$/i.test(head) && head.length > 2) {
+    parts[parts.length - 1] = matchCase(head, head.slice(0, -1));
+    return parts.join(" ");
+  }
+  return trimmed;
+}
+
+function matchCase(original: string, replacement: string): string {
+  if (/^[A-Z]/.test(original)) {
+    return replacement.charAt(0).toUpperCase() + replacement.slice(1);
+  }
+  return replacement;
 }
 
 // ------------------------------------------------------------- OpenAI
