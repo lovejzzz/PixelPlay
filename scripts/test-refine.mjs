@@ -134,6 +134,10 @@ const BACKDROPS = new Set([
   "water", "river", "lake", "pond surface", "sky", "clouds",
   "fog", "mist", "creeping fog", "shadow", "sunlight", "moonlight",
   "full moon", "moon", "sun", "stars", "rain", "snowfall",
+  // Water surfaces — drawn as ground tiles, not as sprite items.
+  "pond", "small pond", "puddle", "puddle of water",
+  "puddle of rainwater", "rain puddle", "stream", "creek",
+  "brook", "waterfall", "fountain water", "well water",
 ]);
 function isBackdrop(raw) {
   const stripped = raw.toLowerCase().replace(/^(a |an |the )/, "").trim();

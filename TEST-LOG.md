@@ -67,3 +67,18 @@ Build: clean.
 2026-05-08 fire #5 — PASS — Scenario: a top-down view of a small town — a wooden house, a brick shop, a small park bench, a street lamp, a single tree, a fountain
 
 2026-05-08 fire #6 — PASS — Scenario: a cyberpunk alley with neon signs — a glowing neon sign, a metal dumpster, a brick wall, a flickering streetlight, a puddle of rainwater, a graffiti-covered panel
+
+## 2026-05-08 fire #7
+
+Scenario: a desert oasis with palm trees
+
+LLM output (gpt-4o-mini, 2.6 s):
+- context: exterior
+- items: a palm tree, a small pond, a sandy rock, a single cactus, a wooden bench
+
+Heuristic flagged nothing — but "a small pond" is a water-surface backdrop (the pond IS the oasis water, drawn as a ground tile, not a sprite). Fire #6 had the same class of slip-through with "a puddle of rainwater". Two water-surface escapes in two consecutive runs is a clear pattern, not a one-off.
+
+Fix (this fire):
+- Extended BACKDROPS in BOTH `app/api/generate/route.ts` (`sanitizeItemDescriptor`) AND `scripts/test-refine.mjs` (kept in sync) with 12 water-surface phrases: pond, small pond, puddle, puddle of water, puddle of rainwater, rain puddle, stream, creek, brook, waterfall, fountain water, well water. Plain "river" / "lake" / "pond surface" were already covered. Future runs that surface "a small pond" will both (a) get sanitized to null at the route, and (b) get flagged by the harness so the issue is visible. The whole BACKDROPS set is duplicated across the two files because the harness runs as a standalone Node script — keeping them aligned by hand is the simplest path until the test layer needs more shared logic.
+
+Build: clean.

@@ -463,6 +463,10 @@ function sanitizeItemDescriptor(raw: string): string | null {
     "fog", "mist", "creeping fog", "shadow", "sunlight", "moonlight",
     "full moon", "moon", "sun", "stars", "rain", "snowfall",
     "misty ground", "snow",
+    // Water surfaces — drawn as ground tiles, not as sprite items.
+    "pond", "small pond", "puddle", "puddle of water",
+    "puddle of rainwater", "rain puddle", "stream", "creek",
+    "brook", "waterfall", "fountain water", "well water",
   ];
   if (BACKDROPS.includes(stripped)) return null;
 
