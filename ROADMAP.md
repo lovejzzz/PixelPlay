@@ -532,6 +532,109 @@ and pixel-art typography (no new font imports, no new color systems).
 
 ---
 
+## Phase 13 — Scene walker quality
+
+Make Play mode feel like a polished pixel-forest / pixel-museum walk:
+the scene composes correctly, the player has a real walking animation,
+the art style stays consistent across an asset set. Each item below is
+one cron-fire scoped — match the existing `farm-ink` palette, keep
+diffs bounded, no new dependencies.
+
+### Composition
+
+- [ ] **Auto-background tile per scene** — when a scene has no
+      `tileGrid` (or a tile grid with zero painted cells), render a
+      full-canvas single-color background tile picked from the scene's
+      `context`: interior → light wood-plank, exterior →
+      grass-green, aerial → sand-tan. Pure CSS background-color on
+      the scene viewport (no new assets generated). Add a per-scene
+      `autoBackgroundColor?: string` field auto-derived at scene
+      creation time from the scene context returned by `extractScene`.
+      `ScenePlayer.tsx` reads it and renders it as the bottom layer
+      under any tile grid layers.
+
+- [ ] **Auto-solid for blocker items** — when split-items composes a
+      scene, auto-set `solid: true` on items whose name matches a
+      "blocks the player" keyword list (cabin, house, building,
+      tower, statue, fountain, tree, pine, oak, fir, boulder, rock,
+      stone wall, gravestone, tombstone, anvil, workbench, dresser,
+      wardrobe, bookshelf, fireplace, cauldron). Add a
+      `defaultSolidForName(name)` helper in `app/page.tsx` and call
+      it from the split-items asset-create path. Don't override
+      explicit user-set values.
+
+- [ ] **Y-sort player into the painter list** — `ScenePlayer.tsx`
+      currently renders the player separately from `sortedItems`. Fold
+      the player into the same painter pass (sorted by `y +
+      spriteHeight`), so a tree behind the player draws first, in
+      front draws over. Player keeps its own animation logic but
+      contributes to the depth sort like any other item. NPCs already
+      participate; align the player to the same scheme.
+
+- [ ] **Scale enforcement in scene-layout** — extend the
+      `gptLayout` system prompt in `app/api/scene-layout/route.ts`
+      with a strict scale rubric: trees / large buildings 0.25–0.40,
+      characters 0.15–0.20, mid-size props 0.10–0.18, small ground
+      props 0.06–0.10. Add a worked example showing the relative
+      sizes. After parsing, clamp returned scales into [0.04, 0.5]
+      defensively. The current rules mention scale but don't penalize
+      a tree returned at 0.08.
+
+### Walking animation
+
+- [ ] **Idle bobble** — when the player has been stationary for >250 ms,
+      add a 1px vertical sine-wave bob (period 1200 ms) to the rendered
+      Y position. Stops the moment movement input arrives. Pure
+      `ScenePlayer.tsx` change in the rAF tick — no new state, just a
+      `Math.sin(performance.now() * ...)` offset applied at render time.
+
+- [ ] **Player + NPC shadow ellipses** — render a soft dark ellipse
+      under each character sprite (player, NPC, any character item
+      while in Play mode). 60% sprite width, 14% sprite height, 28%
+      black, slight blur via `radial-gradient` background. Renders
+      just below the sprite as part of the same draw layer so it
+      moves with the character. Adds depth without any new images.
+
+- [ ] **Walk-cycle slicing robustness** — `sliceSheet` in
+      `app/lib/sprites.ts` currently assumes the LLM-returned sprite
+      sheet is laid out exactly cols × rows. When the model returns a
+      4-cell row in a 4×4 sheet (e.g. blank rows 2–4), the slice is
+      garbage. Add a "non-empty cell" detection pass: count cells
+      whose centre 50% has any non-transparent pixels; if the
+      detected non-empty count is closer to a 1×4 layout, re-slice
+      as 1×4. Fall back to original if ambiguous.
+
+- [ ] **Diagonal walk handling** — when both Up+Right (etc.) are held,
+      the current direction logic in `ScenePlayer.tsx` may freeze the
+      cycle or pick neither. Pick the axis with the larger absolute
+      input as the dominant frame direction; tiebreak by previous
+      direction (sticky). Pure logic change in the input-to-direction
+      mapping.
+
+### Art consistency
+
+- [ ] **Style reference threaded through every split-items call** —
+      audit `composeSceneFromAssets` and the split-items branch of
+      `app/api/generate/route.ts`: every per-item image-gen call
+      should receive the project's `referenceUrls` (style ref + any
+      scene-level reference). If any branch is missing it, plumb it
+      through. Goal: every generated asset in a scene shares the same
+      visual reference, eliminating the per-asset style drift.
+
+### Atmosphere
+
+- [ ] **Ambient context particles** — when Play mode is active,
+      render 6–10 drifting CSS-only particles tied to the scene's
+      context: interior → soft dust motes (warm white, 3px, slow
+      Brownian); exterior → green/yellow leaves (3–4px, gentle
+      diagonal drift); aerial → small white clouds drifting east
+      across the camera. New `app/components/AmbientLayer.tsx`,
+      mounted inside `ScenePlayer.tsx` above tiles and below items.
+      Particles loop seamlessly. `prefers-reduced-motion` disables.
+      No new images — use small CSS shapes.
+
+---
+
 ## When everything in every phase is checked
 
 - Append a "ALL PHASES COMPLETE" entry to `CRON-LOG.md` with the date.
