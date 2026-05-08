@@ -522,7 +522,7 @@ and pixel-art typography (no new font imports, no new color systems).
       global stylesheet. No new dependencies. `prefers-reduced-motion`
       gates all of it.
 
-- [ ] **Asset gallery density toggle** — a small "▦ / ▤" button in the
+- [x] **Asset gallery density toggle** — a small "▦ / ▤" button in the
       gallery header (next to the sort dropdown) toggles between
       "comfortable" (current 3-column layout, larger cards) and
       "compact" (4-column, smaller cards, smaller fonts). Persisted to

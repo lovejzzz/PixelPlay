@@ -484,6 +484,12 @@ export default function Home() {
   const [selectMode, setSelectMode] = useState(false);
   const [selectedAssetIds, setSelectedAssetIds] = useState<Set<string>>(new Set());
   const [assetSort, setAssetSort] = useState<"newest" | "oldest" | "name" | "type">("newest");
+  /** Gallery density toggle. "comfortable" = 3-column, larger cards
+   *  (default); "compact" = 4-column, smaller padding + font. Persisted
+   *  to localStorage as `pixelplay:gallery-density`. */
+  const [galleryDensity, setGalleryDensity] = useState<"comfortable" | "compact">(
+    "comfortable"
+  );
   /** Cursor-anchored context menu raised by right-clicking an AssetCard.
    *  Null when no menu is open. */
   const [assetContextMenu, setAssetContextMenu] = useState<
@@ -791,6 +797,7 @@ export default function Home() {
   const FAL_KEY_LS = "pixelplay:fal-key:v1";
   const IMAGE_PROVIDER_LS = "pixelplay:image-provider:v1";
   const ONBOARDED_LS_KEY = "pixelplay:onboarded:v1";
+  const GALLERY_DENSITY_LS = "pixelplay:gallery-density";
   useEffect(() => {
     try {
       const raw = localStorage.getItem(HISTORY_KEY);
@@ -804,6 +811,8 @@ export default function Home() {
       if (fk) setFalKey(fk);
       const provider = localStorage.getItem(IMAGE_PROVIDER_LS);
       if (provider === "openai" || provider === "fal") setImageProvider(provider);
+      const density = localStorage.getItem(GALLERY_DENSITY_LS);
+      if (density === "comfortable" || density === "compact") setGalleryDensity(density);
       // Show onboarding modal on first visit.
       if (!localStorage.getItem(ONBOARDED_LS_KEY)) setOnboardingOpen(true);
       // Cross-session user profile (Hermes USER.md analog) — seed form
@@ -4582,6 +4591,24 @@ export default function Home() {
                     <option value="name">Name A-Z</option>
                     <option value="type">Type</option>
                   </select>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const next = galleryDensity === "comfortable" ? "compact" : "comfortable";
+                      setGalleryDensity(next);
+                      try {
+                        localStorage.setItem(GALLERY_DENSITY_LS, next);
+                      } catch {}
+                    }}
+                    title={
+                      galleryDensity === "comfortable"
+                        ? "Switch to compact (4-column) gallery"
+                        : "Switch to comfortable (3-column) gallery"
+                    }
+                    className="text-xs px-2 py-1 border border-farm-wood text-farm-parchment hover:border-farm-grass hover:text-farm-grass focus:outline-none"
+                  >
+                    {galleryDensity === "comfortable" ? "▤" : "▦"}
+                  </button>
                   {(search || activeTags.length > 0) && (
                     <button
                       onClick={() => {
@@ -4704,14 +4731,20 @@ export default function Home() {
                 </div>
               )
             ) : (
-              <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
+              <div
+                className={`grid grid-cols-2 ${
+                  galleryDensity === "compact" ? "lg:grid-cols-4 gap-2" : "lg:grid-cols-3 gap-3"
+                }`}
+              >
                 {busy &&
                   Array.from({
                     length: Math.min(4, Math.max(1, variants)),
                   }).map((_, i) => (
                     <div
                       key={`forge-skeleton-${i}`}
-                      className="bg-farm-ink/60 border-2 border-farm-wood p-2 flex flex-col gap-2"
+                      className={`bg-farm-ink/60 border-2 border-farm-wood flex flex-col ${
+                        galleryDensity === "compact" ? "p-1.5 gap-1.5" : "p-2 gap-2"
+                      }`}
                       aria-hidden="true"
                     >
                       <div className="aspect-square skeleton-shimmer" />
@@ -4757,6 +4790,7 @@ export default function Home() {
                     onRequestContextMenu={(x, y) =>
                       setAssetContextMenu({ x, y, assetId: a.id })
                     }
+                    density={galleryDensity}
                   />
                 ))}
               </div>
@@ -8471,6 +8505,7 @@ function AssetCard({
   selected,
   onToggleSelect,
   onRequestContextMenu,
+  density,
 }: {
   asset: Asset;
   onDownloadPNG: () => void;
@@ -8501,6 +8536,8 @@ function AssetCard({
   onToggleSelect: () => void;
   /** Right-click → open the cursor-anchored context menu in Home. */
   onRequestContextMenu: (x: number, y: number) => void;
+  /** "comfortable" = default padding/font; "compact" tightens both. */
+  density: "comfortable" | "compact";
 }) {
   const [w, h] = parseSize(asset.sourceSize);
   const aspect = `${w} / ${h}`;
@@ -8566,10 +8603,13 @@ function AssetCard({
     onSetTags((asset.tags || []).filter((x) => x !== t));
   }
 
+  const compact = density === "compact";
   return (
     <div
       ref={cardRef}
-      className={`group animate-card-in bg-farm-ink/60 border-2 p-2 flex flex-col gap-2 relative ${
+      className={`group animate-card-in bg-farm-ink/60 border-2 flex flex-col relative ${
+        compact ? "p-1.5 gap-1.5" : "p-2 gap-2"
+      } ${
         selectMode && selected
           ? "border-farm-grass ring-2 ring-farm-grass/40"
           : "border-farm-wood"
@@ -8779,7 +8819,9 @@ function AssetCard({
             setEditingName(true);
           }}
           title="Click to rename"
-          className="text-xs opacity-90 truncate cursor-text hover:text-farm-grass"
+          className={`opacity-90 truncate cursor-text hover:text-farm-grass ${
+            compact ? "text-[11px]" : "text-xs"
+          }`}
         >
           {asset.name || asset.prompt}
         </div>
