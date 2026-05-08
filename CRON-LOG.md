@@ -199,3 +199,5 @@ memory, save-as-recipe toast, asset embeddings, semantic search).
 2026-05-08 ALL PHASES COMPLETE — nothing to do. Verified zero `- [ ]` entries across every phase of ROADMAP.md; only `[SKIP-CRON]` items remain (page.tsx split, inpainting, CI/test suite, dropping the API-route proxy, multi-character party, scripted scenes, animation editor, concierge agent mode placeholder). No code changes this fire.
 
 2026-05-08 ALL PHASES COMPLETE — nothing to do.
+
+2026-05-08 ALL PHASES COMPLETE — nothing to do.
