@@ -114,3 +114,5 @@ Fix (this fire):
 - Extended the plural-detection heuristic in `scripts/test-refine.mjs` to skip items containing compound-descriptor connectors: ` with `, ` covered in `, ` covered with `, ` full of `, ` filled with `, ` of `. When a connector is present, the head noun comes BEFORE it; the last word is just a modifier and shouldn't drive the plural flag. 14 unit cases pass: compound forms like "a bed with blankets" / "a chair covered in vines" / "a basket of apples" / "a bowl full of fruit" / "a vase filled with flowers" all return false; bare plurals like "plates" / "several mushrooms" still return true.
 
 Build: clean.
+
+2026-05-08 fire #10 — PASS — Scenario: a haunted graveyard at night — a weathered tombstone, a rusty iron gate, a gnarled dead tree, a single skull, a stone statue, a wilted flower
