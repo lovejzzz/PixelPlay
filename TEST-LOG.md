@@ -82,3 +82,20 @@ Fix (this fire):
 - Extended BACKDROPS in BOTH `app/api/generate/route.ts` (`sanitizeItemDescriptor`) AND `scripts/test-refine.mjs` (kept in sync) with 12 water-surface phrases: pond, small pond, puddle, puddle of water, puddle of rainwater, rain puddle, stream, creek, brook, waterfall, fountain water, well water. Plain "river" / "lake" / "pond surface" were already covered. Future runs that surface "a small pond" will both (a) get sanitized to null at the route, and (b) get flagged by the harness so the issue is visible. The whole BACKDROPS set is duplicated across the two files because the harness runs as a standalone Node script — keeping them aligned by hand is the simplest path until the test layer needs more shared logic.
 
 Build: clean.
+
+## 2026-05-08 fire #8
+
+Scenario: a steampunk airship deck
+
+LLM output (gpt-4o-mini, 2.8 s):
+- context: exterior
+- items: a wooden airship deck, a brass steering wheel, a steam engine, a set of goggles, a coiled rope, a metal lantern
+
+Two flags from the harness:
+1. `issues: collective noun: "a set of goggles"` — but this is already correctly handled by the route. Sanitizer strips "set of", IRREGULAR map keeps "goggles" plural (added in fire #4), image gets "single goggles" → renders as one pair. No fix needed.
+2. `plural_suspects: "a brass steering wheel"` — false positive. The harness's plural regex matched "brass" mid-string and flagged the whole item. "Wheel" is the actual head noun and isn't plural.
+
+Fix (this fire):
+- Rewrote the plural-detection heuristic in `scripts/test-refine.mjs` to inspect ONLY the LAST word of each item (the head noun). The previous regex matched any plural-looking word starting from the head — so material adjectives like brass / glass / grass appearing mid-string fired the flag. New version: split on whitespace, take last word, check it ends in -s; skip -ss / -us / -is endings (matches the route's singularize() skip-rule); skip the 16 plurale-tantum nouns (tongs, scissors, glasses, etc.). 13 unit cases pass: "a brass steering wheel" / "a glass jar" / "a moss-covered rock" / "a wooden mass" / "an iron axis" / "a small cactus" all return false; "a set of plates" / "a pair of boots" / "a pile of bones" / "a basket of apples" return true.
+
+Build: clean.

@@ -168,10 +168,22 @@ if (overlong.length) issues.push(`item too long (>6 words): ${overlong.join(", "
 // balloons, etc.) — only flag stricter collectives that mean "many objects".
 const collectiveSuspects = items.filter((x) => /\b(set of|pair of|group of|cluster of|stack of|pile of)\b/i.test(x || ""));
 if (collectiveSuspects.length) issues.push(`collective noun: ${collectiveSuspects.join(", ")}`);
-const plurals = items.filter((x) =>
-  /^(a |an |one |two |three |four |five )?\w+s\b/i.test(x || "") &&
-  !/(grass|glass|brass|moss|cross|chess|less)$/i.test(x || "")
-);
+// Only inspect the LAST word — the head noun. Earlier regex matched
+// "brass" or "glass" mid-phrase ("a brass steering wheel") and falsely
+// flagged the whole item as a plural suspect.
+const plurals = items.filter((x) => {
+  if (typeof x !== "string") return false;
+  const parts = x.trim().split(/\s+/);
+  const last = (parts[parts.length - 1] || "").toLowerCase();
+  if (!/\w+s$/.test(last)) return false;
+  // Words ending in -ss / -us / -is aren't plurals (matches the route's
+  // singularize() skip rule): brass, grass, glass, moss, mass, class,
+  // harness, virus, focus, cactus, axis, mantis, etc.
+  if (/(ss|us|is)$/.test(last)) return false;
+  // Plurale tantum: grammatically plural but semantically one item.
+  if (/^(tongs|scissors|pliers|tweezers|shears|pincers|glasses|sunglasses|goggles|binoculars|pants|jeans|shorts|trousers|pajamas|headphones)$/.test(last)) return false;
+  return true;
+});
 
 console.log(
   JSON.stringify(
