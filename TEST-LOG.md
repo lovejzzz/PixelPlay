@@ -65,3 +65,5 @@ Fix (this fire):
 Build: clean.
 
 2026-05-08 fire #5 — PASS — Scenario: a top-down view of a small town — a wooden house, a brick shop, a small park bench, a street lamp, a single tree, a fountain
+
+2026-05-08 fire #6 — PASS — Scenario: a cyberpunk alley with neon signs — a glowing neon sign, a metal dumpster, a brick wall, a flickering streetlight, a puddle of rainwater, a graffiti-covered panel
