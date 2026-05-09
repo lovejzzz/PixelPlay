@@ -542,7 +542,7 @@ diffs bounded, no new dependencies.
 
 ### Composition
 
-- [ ] **Auto-background tile per scene** — when a scene has no
+- [x] **Auto-background tile per scene** — when a scene has no
       `tileGrid` (or a tile grid with zero painted cells), render a
       full-canvas single-color background tile picked from the scene's
       `context`: interior → light wood-plank, exterior →

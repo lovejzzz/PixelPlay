@@ -740,6 +740,9 @@ export function ScenePlayer({
           transform: `translate(${camX}px, ${camY}px)`,
           backgroundSize: "12.5%",
           imageRendering: "pixelated",
+          ...(scene.autoBackgroundColor
+            ? { backgroundColor: scene.autoBackgroundColor }
+            : {}),
           ...(scene.backgroundTileId && assets[scene.backgroundTileId]
             ? {
                 backgroundImage: `url(${assets[scene.backgroundTileId].pixelUrl})`,

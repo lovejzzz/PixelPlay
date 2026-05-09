@@ -192,6 +192,10 @@ type Scene = {
   items: SceneItem[];
   /** Painted tile layers (Phase-4 tile painting tool). */
   tileGrid?: TileGrid;
+  /** Fallback flat-color background derived from the scene's parsed
+   *  context at compose-time. Renders as the bottom layer under any
+   *  tile grid layers so an empty / partly-erased scene isn't a void. */
+  autoBackgroundColor?: string;
   /** 0 = midnight, 0.5 = noon, 1 = midnight again. Tints play view. */
   daytime?: number;
   /** Items that failed to generate when the scene was composed. Surfaced
@@ -2205,6 +2209,7 @@ export default function Home() {
       height: 1024,
       items: sceneItems,
       failedItems: failedItems && failedItems.length > 0 ? failedItems : undefined,
+      autoBackgroundColor: autoBackgroundColorForContext(context),
       createdAt: Date.now(),
     };
 
@@ -2804,6 +2809,20 @@ export default function Home() {
    *  Picks tile by context first (interior → wood/stone, aerial/exterior
    *  → grass) and refines via keyword match on the scene name when the
    *  basic context is too coarse (e.g. "wizard's potion shop" → stone). */
+  /** Picks a flat fallback color for a scene's `autoBackgroundColor` field
+   *  based on its parsed context. Rendered under any tile-grid layers in
+   *  Play mode so an empty (or partly-erased) tile grid doesn't show the
+   *  dark editor checker. Returns undefined when context is unknown so
+   *  legacy / hand-built scenes don't get a forced color. */
+  function autoBackgroundColorForContext(
+    context?: "interior" | "exterior" | "aerial"
+  ): string | undefined {
+    if (context === "interior") return "#c9a779";
+    if (context === "exterior") return "#7cb86b";
+    if (context === "aerial") return "#d6c08a";
+    return undefined;
+  }
+
   function ensureGroundLayer(
     sceneId: string,
     context?: "interior" | "exterior" | "aerial",

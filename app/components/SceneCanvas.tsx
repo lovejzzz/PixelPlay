@@ -66,6 +66,7 @@ export type CanvasScene = {
   backgroundTileId?: string;
   items: CanvasItem[];
   tileGrid?: CanvasTileGrid;
+  autoBackgroundColor?: string;
   daytime?: number;
 };
 
