@@ -133,3 +133,18 @@ Fix (this fire):
 Build: clean.
 
 2026-05-08 fire #12 — PASS — Scenario: a haunted attic with old furniture — a dusty wooden trunk, a rickety rocking chair, an old wooden table, a cobweb-covered mirror, a tattered armchair, a flickering lantern
+
+## 2026-05-08 fire #13
+
+Scenario: an abandoned subway tunnel
+
+LLM output (gpt-4o-mini, 2.5 s):
+- context: exterior
+- items: a rusty train car, a broken signpost, a crumbling brick wall, a flickering light bulb, a puddle of water
+
+Two signals: (1) harness flagged "puddle of water" as a backdrop — the route already drops this since fire #7 added water-surface phrases to BACKDROPS, so the wiring is correct. (2) NOT flagged but visible: "a crumbling brick wall" is an architectural-surface backdrop. This is the 3rd wall-as-surface escape across the cron's history (fires #3 cracked concrete wall, #6 brick wall, now #13 crumbling brick wall). Per the note in fire #6 — three escapes warrants action.
+
+Fix (this fire):
+- Extended BACKDROPS in BOTH `app/api/generate/route.ts` and `scripts/test-refine.mjs` with 13 architectural-surface phrases: brick wall, concrete wall, cracked concrete wall, crumbling brick wall, crumbling wall, cracked wall, tiled wall, tiled bathroom wall, wood floor, wooden floor, concrete floor, tiled floor, ceiling tile. Bare "wall" is intentionally NOT included — "a stone wall" or "a low garden wall" can be a valid freestanding barrier prop in exterior scenes. The list only includes multi-word architectural phrases that clearly describe the room's container surfaces (the wall texture, the floor surface, the ceiling tile pattern).
+
+Build: clean.

@@ -473,6 +473,17 @@ function sanitizeItemDescriptor(raw: string): string | null {
     "gravel", "raked gravel", "gravel area", "raked gravel area",
     "raked sand", "raked sand area", "pebbles", "cobblestones",
     "moss patch", "grass patch", "leaf litter",
+    // Architectural surfaces (room walls / floors / ceilings). When the
+    // scene IS a room/tunnel/alley, its walls/floors are the container,
+    // not items. Caught by 3 fires across the cron history (cracked
+    // concrete wall, brick wall, crumbling brick wall). Bare "wall" is
+    // intentionally NOT here — "a stone wall" can be a freestanding
+    // garden barrier prop. Only multi-word architectural phrases.
+    "brick wall", "concrete wall", "cracked concrete wall",
+    "crumbling brick wall", "crumbling wall", "cracked wall",
+    "tiled wall", "tiled bathroom wall",
+    "wood floor", "wooden floor", "concrete floor", "tiled floor",
+    "ceiling tile",
   ];
   if (BACKDROPS.includes(stripped)) return null;
 

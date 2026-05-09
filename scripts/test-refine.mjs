@@ -142,6 +142,12 @@ const BACKDROPS = new Set([
   "gravel", "raked gravel", "gravel area", "raked gravel area",
   "raked sand", "raked sand area", "pebbles", "cobblestones",
   "moss patch", "grass patch", "leaf litter",
+  // Architectural surfaces (room walls / floors / ceilings).
+  "brick wall", "concrete wall", "cracked concrete wall",
+  "crumbling brick wall", "crumbling wall", "cracked wall",
+  "tiled wall", "tiled bathroom wall",
+  "wood floor", "wooden floor", "concrete floor", "tiled floor",
+  "ceiling tile",
 ]);
 function isBackdrop(raw) {
   const stripped = raw.toLowerCase().replace(/^(a |an |the )/, "").trim();
