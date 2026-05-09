@@ -138,6 +138,10 @@ const BACKDROPS = new Set([
   "pond", "small pond", "puddle", "puddle of water",
   "puddle of rainwater", "rain puddle", "stream", "creek",
   "brook", "waterfall", "fountain water", "well water",
+  // Ground / surface phrases dressed up as items.
+  "gravel", "raked gravel", "gravel area", "raked gravel area",
+  "raked sand", "raked sand area", "pebbles", "cobblestones",
+  "moss patch", "grass patch", "leaf litter",
 ]);
 function isBackdrop(raw) {
   const stripped = raw.toLowerCase().replace(/^(a |an |the )/, "").trim();

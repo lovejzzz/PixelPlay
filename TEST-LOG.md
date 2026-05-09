@@ -116,3 +116,18 @@ Fix (this fire):
 Build: clean.
 
 2026-05-08 fire #10 — PASS — Scenario: a haunted graveyard at night — a weathered tombstone, a rusty iron gate, a gnarled dead tree, a single skull, a stone statue, a wilted flower
+
+## 2026-05-08 fire #11
+
+Scenario: a Japanese zen garden
+
+LLM output (gpt-4o-mini, 2.3 s):
+- context: exterior
+- items: a stone lantern, a bamboo fence, a wooden bench, a raked gravel area, a bonsai tree, a single rock
+
+Harness flagged nothing — but "a raked gravel area" is a ground-surface backdrop. The raked gravel IS the floor of a zen garden, drawn as a tile pattern, not a sprite item. Same class as the water-surface escape in fire #7 ("a small pond"): a backdrop dressed up with descriptive language slips past the strict whole-string match in BACKDROPS. This is the 4th backdrop-dressed-up-as-item escape across the cron's history (fires #3, #6 architectural, #7 water, now #11 ground).
+
+Fix (this fire):
+- Extended BACKDROPS in BOTH `app/api/generate/route.ts` (`sanitizeItemDescriptor`) AND `scripts/test-refine.mjs` (kept in sync) with 11 ground / surface phrases that came up explicitly or are likely siblings: gravel, raked gravel, gravel area, raked gravel area, raked sand, raked sand area, pebbles, cobblestones, moss patch, grass patch, leaf litter. These are all ground textures the LLM may try to surface as items in zen-garden / forest / path scenes.
+
+Build: clean.

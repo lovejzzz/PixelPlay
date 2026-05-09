@@ -467,6 +467,12 @@ function sanitizeItemDescriptor(raw: string): string | null {
     "pond", "small pond", "puddle", "puddle of water",
     "puddle of rainwater", "rain puddle", "stream", "creek",
     "brook", "waterfall", "fountain water", "well water",
+    // Ground / surface phrases dressed up as items. The "raked gravel"
+    // family came up in a zen-garden scene where the LLM tried to make
+    // the iconic floor texture an item. These are tiles, not sprites.
+    "gravel", "raked gravel", "gravel area", "raked gravel area",
+    "raked sand", "raked sand area", "pebbles", "cobblestones",
+    "moss patch", "grass patch", "leaf litter",
   ];
   if (BACKDROPS.includes(stripped)) return null;
 
