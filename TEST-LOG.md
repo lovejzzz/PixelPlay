@@ -131,3 +131,5 @@ Fix (this fire):
 - Extended BACKDROPS in BOTH `app/api/generate/route.ts` (`sanitizeItemDescriptor`) AND `scripts/test-refine.mjs` (kept in sync) with 11 ground / surface phrases that came up explicitly or are likely siblings: gravel, raked gravel, gravel area, raked gravel area, raked sand, raked sand area, pebbles, cobblestones, moss patch, grass patch, leaf litter. These are all ground textures the LLM may try to surface as items in zen-garden / forest / path scenes.
 
 Build: clean.
+
+2026-05-08 fire #12 — PASS — Scenario: a haunted attic with old furniture — a dusty wooden trunk, a rickety rocking chair, an old wooden table, a cobweb-covered mirror, a tattered armchair, a flickering lantern
