@@ -148,3 +148,5 @@ Fix (this fire):
 - Extended BACKDROPS in BOTH `app/api/generate/route.ts` and `scripts/test-refine.mjs` with 13 architectural-surface phrases: brick wall, concrete wall, cracked concrete wall, crumbling brick wall, crumbling wall, cracked wall, tiled wall, tiled bathroom wall, wood floor, wooden floor, concrete floor, tiled floor, ceiling tile. Bare "wall" is intentionally NOT included — "a stone wall" or "a low garden wall" can be a valid freestanding barrier prop in exterior scenes. The list only includes multi-word architectural phrases that clearly describe the room's container surfaces (the wall texture, the floor surface, the ceiling tile pattern).
 
 Build: clean.
+
+2026-05-08 fire #14 — PASS — Scenario: a viking longhouse interior — a wooden long table, a stone fireplace, a fur rug, a wooden chair, a wall-mounted shield, a horned helmet
