@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { pixelateImageUrl } from "./lib/pixelate";
-import { buildSpriteZip, sliceSheet } from "./lib/sprites";
+import { analyzeBounds, buildSpriteZip, sliceSheet } from "./lib/sprites";
 import { checkSheetVariety } from "./lib/varietyCheck";
 import { trimAlphaToContent } from "./lib/trimAlpha";
 import { idbGet, idbSet } from "./lib/storage";
@@ -104,6 +104,14 @@ type Asset = {
    *  `name + prompt + tags`. Generated fire-and-forget after asset
    *  creation. Used by the gallery's semantic-search fallback. ~6 KB. */
   embedding?: number[];
+  /** Bounding box of the visible non-transparent pixels in the asset's
+   *  rendered image, as fractions [0, 1] of the image dimensions.
+   *  Computed once at generation time via canvas pixel-analysis so the
+   *  relation resolver can use the actual visible top edge instead of
+   *  guessing from `scale × longest_canvas_edge` (gpt-image-1 returns
+   *  sprites with unpredictable transparent padding — a "lamp" might be
+   *  90% sprite + 10% padding, or 60% sprite + 40% padding). */
+  bounds?: import("./lib/sprites").SpriteBounds;
 };
 
 type ProjectStyle = {
@@ -1335,6 +1343,39 @@ export default function Home() {
     }
   }
 
+  /** Fire-and-forget bounds analysis for newly-created assets. Mirrors
+   *  embedAssets — runs async after generation, writes the result back
+   *  via setAssets. Used by the relation resolver to snap stacked items
+   *  (lamp ON nightstand) to the host's actual visible top edge instead
+   *  of guessing height from `scale × longest`. Quiet failure: any error
+   *  during canvas analysis just leaves bounds undefined, and downstream
+   *  code falls back to scale-based estimates. */
+  async function analyzeBoundsForAssets(ids: string[]) {
+    if (ids.length === 0) return;
+    const targets = ids
+      .map((id) => {
+        const a = assets[id];
+        if (!a || a.bounds) return null;
+        return a.pixelUrl ? { id, url: a.pixelUrl } : null;
+      })
+      .filter((x): x is { id: string; url: string } => !!x);
+    if (targets.length === 0) return;
+    // Run them in parallel — each is a small canvas op (~1-2 ms for a
+    // 1024×1024 image on a modern laptop).
+    const results = await Promise.all(
+      targets.map(async (t) => ({ id: t.id, bounds: await analyzeBounds(t.url) }))
+    );
+    setAssets((a) => {
+      const next = { ...a };
+      for (const r of results) {
+        if (r.bounds && next[r.id]) {
+          next[r.id] = { ...next[r.id], bounds: r.bounds };
+        }
+      }
+      return next;
+    });
+  }
+
   /** Semantic-search fallback: when the substring search comes up empty
    *  AND we have at least one asset with an embedding, embed the query
    *  and rank by cosine similarity. Debounced 350ms; tokenised so a
@@ -1897,6 +1938,11 @@ export default function Home() {
       // search can do semantic match (~$0.0001 per asset).
       void embedAssets(newIds);
 
+      // Fire-and-forget sprite-bounds analysis so the relation resolver
+      // can snap "on" / "above" placements to the host's actual top
+      // edge instead of guessing from scale.
+      void analyzeBoundsForAssets(newIds);
+
       // Variety check for multi-frame sheets.
       if (cols * rows > 1) {
         for (const [id, asset] of Object.entries(updates)) {
@@ -2100,6 +2146,7 @@ export default function Home() {
       };
       setAssets((a) => ({ ...a, [id]: newAsset }));
       void embedAssets([id]);
+      void analyzeBoundsForAssets([id]);
       const editSpend = route.isFal
         ? (typeof data.cost === "number" ? data.cost : 0)
         : estimateImageCost(quality, "1024x1024", 1);
@@ -3407,6 +3454,7 @@ export default function Home() {
         sourceSize: asset.sourceSize,
         tags: asset.tags || [],
         createdAt: asset.createdAt,
+        ...(asset.bounds ? { bounds: asset.bounds } : {}),
       });
       const cols = asset.cols || 1;
       const rows = asset.rows || 1;
@@ -3601,6 +3649,7 @@ export default function Home() {
       sourceSize?: string;
       tags?: string[];
       createdAt?: number;
+      bounds?: { top: number; bottom: number; left: number; right: number };
     };
     const indexJson = await indexFile.async("string");
     let assetIndex: IndexEntry[];
@@ -3662,6 +3711,13 @@ export default function Home() {
         rows: entry.rows || 1,
         tags: entry.tags || [],
         createdAt: entry.createdAt || Date.now(),
+        ...(entry.bounds &&
+        typeof entry.bounds.top === "number" &&
+        typeof entry.bounds.bottom === "number" &&
+        typeof entry.bounds.left === "number" &&
+        typeof entry.bounds.right === "number"
+          ? { bounds: entry.bounds }
+          : {}),
       };
       oldIdToNewId.set(entry.id, newId);
       filenameToNewId.set(entry.file, newId);

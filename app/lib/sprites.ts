@@ -1,4 +1,53 @@
 import JSZip from "jszip";
+import { analyzeBoundsFromRGBA } from "./spriteBounds.mjs";
+
+/** Bounding box of an asset's non-transparent pixels, as fractions of
+ *  the image dimensions. Computed once at generation time (analyzeBounds
+ *  below) and stored on `Asset.bounds` so the relation resolver can use
+ *  the actual visible top/bottom/sides instead of a scale-based estimate. */
+export type SpriteBounds = {
+  top: number;
+  bottom: number;
+  left: number;
+  right: number;
+};
+
+/** Browser-only: load a data URL into an Image, draw to an offscreen
+ *  canvas, and return the visible bounding box as fractions. Returns
+ *  null on any failure (CORS, decode error, missing canvas) so callers
+ *  can degrade to the legacy scale-based math. */
+export async function analyzeBounds(dataUrl: string): Promise<SpriteBounds | null> {
+  if (typeof document === "undefined" || typeof Image === "undefined") return null;
+  return new Promise<SpriteBounds | null>((resolve) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      try {
+        const W = img.naturalWidth;
+        const H = img.naturalHeight;
+        if (W === 0 || H === 0) {
+          resolve(null);
+          return;
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = W;
+        canvas.height = H;
+        const ctx = canvas.getContext("2d", { willReadFrequently: true });
+        if (!ctx) {
+          resolve(null);
+          return;
+        }
+        ctx.drawImage(img, 0, 0);
+        const imageData = ctx.getImageData(0, 0, W, H);
+        resolve(analyzeBoundsFromRGBA(imageData.data, W, H));
+      } catch {
+        resolve(null);
+      }
+    };
+    img.onerror = () => resolve(null);
+    img.src = dataUrl;
+  });
+}
 
 /**
  * Slices a sprite-sheet image into rows × cols frames and returns each as a

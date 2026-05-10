@@ -653,7 +653,7 @@ Strategy: six sub-systems. Each item is one cron fire, bounded diff.
 
 ### Bounds & categories — foundation
 
-- [ ] **Sprite-bounds analysis** — after a successful image generation,
+- [x] **Sprite-bounds analysis** — after a successful image generation,
       run a small canvas pixel-analysis to find the bounding box of
       the non-transparent content. Store as `Asset.bounds = { top,
       bottom, left, right }` (fractions 0–1 of the image dimensions).
