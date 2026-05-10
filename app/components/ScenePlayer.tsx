@@ -276,7 +276,23 @@ export function ScenePlayer({
       if (dx !== 0 || dy !== 0) {
         movingRef.current = true;
         lastMovedAtRef.current = performance.now();
-        if (Math.abs(dx) > Math.abs(dy)) {
+        // Pick the dominant axis. On a perfect diagonal (e.g. holding
+        // Up+Right with equal magnitudes), the strict `>` flipped the
+        // facing back and forth between adjacent ticks because tiny
+        // floating-point drift made one side win. Sticky tiebreak:
+        // keep the previous axis if both axes are tied — so a player
+        // walking diagonally retains a stable walk-cycle direction
+        // until the input clearly favours the other axis.
+        const ax = Math.abs(dx);
+        const ay = Math.abs(dy);
+        const prev = facingRef.current;
+        const useX =
+          ax > ay
+            ? true
+            : ay > ax
+            ? false
+            : prev === "east" || prev === "west";
+        if (useX) {
           facingRef.current = dx > 0 ? "east" : "west";
         } else {
           facingRef.current = dy > 0 ? "south" : "north";

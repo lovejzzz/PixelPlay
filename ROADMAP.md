@@ -604,7 +604,7 @@ diffs bounded, no new dependencies.
       detected non-empty count is closer to a 1×4 layout, re-slice
       as 1×4. Fall back to original if ambiguous.
 
-- [ ] **Diagonal walk handling** — when both Up+Right (etc.) are held,
+- [x] **Diagonal walk handling** — when both Up+Right (etc.) are held,
       the current direction logic in `ScenePlayer.tsx` may freeze the
       cycle or pick neither. Pick the axis with the larger absolute
       input as the dominant frame direction; tiebreak by previous
