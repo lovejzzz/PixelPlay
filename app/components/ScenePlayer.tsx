@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { sliceSheet } from "../lib/sprites";
 import type { CanvasAsset, CanvasItem, CanvasScene } from "./SceneCanvas";
+import { AmbientLayer } from "./AmbientLayer";
 
 /**
  * Play-mode runtime for a Scene. Renders a viewport that follows an active
@@ -818,6 +819,11 @@ export function ScenePlayer({
               </div>
             );
           })}
+        {/* Ambient context particles — drifting dust / leaves / clouds
+            tied to the scene's parsed context (inferred from
+            autoBackgroundColor). Mounted above tile layers and below
+            items so it reads as atmosphere, not as gameplay. */}
+        <AmbientLayer autoBackgroundColor={scene.autoBackgroundColor} />
         {sortedItems.map((it) => {
           // Trigger zones + sound triggers are invisible in play mode.
           if (it.kind === "trigger" || it.kind === "sound") return null;

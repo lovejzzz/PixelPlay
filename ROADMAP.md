@@ -623,7 +623,7 @@ diffs bounded, no new dependencies.
 
 ### Atmosphere
 
-- [ ] **Ambient context particles** — when Play mode is active,
+- [x] **Ambient context particles** — when Play mode is active,
       render 6–10 drifting CSS-only particles tied to the scene's
       context: interior → soft dust motes (warm white, 3px, slow
       Brownian); exterior → green/yellow leaves (3–4px, gentle

@@ -134,3 +134,33 @@ textarea, input {
   .animate-modal-in,
   .animate-tab-fade { animation: none; }
 }
+
+/* Ambient context particles — interior dust, exterior leaves, aerial
+   clouds. Used by app/components/AmbientLayer.tsx. The component
+   itself short-circuits when prefers-reduced-motion is on, but the
+   keyframes are also gated below as a defensive belt-and-suspenders. */
+@keyframes pwf-dust-mote {
+  0%   { transform: translate(0, 0); opacity: 0.5; }
+  25%  { transform: translate(6px, -4px); opacity: 0.8; }
+  50%  { transform: translate(-3px, -8px); opacity: 0.6; }
+  75%  { transform: translate(-7px, 2px); opacity: 0.85; }
+  100% { transform: translate(0, 0); opacity: 0.5; }
+}
+@keyframes pwf-leaf-drift {
+  0%   { transform: translate(0, 0) rotate(0deg); opacity: 0; }
+  10%  { opacity: 0.8; }
+  90%  { opacity: 0.8; }
+  100% { transform: translate(120vw, 110vh) rotate(540deg); opacity: 0; }
+}
+@keyframes pwf-cloud-drift {
+  0%   { transform: translateX(0); opacity: 0; }
+  10%  { opacity: 0.7; }
+  90%  { opacity: 0.7; }
+  100% { transform: translateX(130vw); opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* Defensive — AmbientLayer also returns null when reduce-motion is on. */
+  [style*="pwf-dust-mote"],
+  [style*="pwf-leaf-drift"],
+  [style*="pwf-cloud-drift"] { animation: none !important; }
+}
