@@ -218,6 +218,11 @@ type Scene = {
    *  context at compose-time. Renders as the bottom layer under any
    *  tile grid layers so an empty / partly-erased scene isn't a void. */
   autoBackgroundColor?: string;
+  /** Granular room/place type returned by extractScene (Phase 14):
+   *  bedroom / kitchen / forest / desert / workshop / etc. Used by
+   *  the item-room validation badge (next fire). One of the values
+   *  exported by `app/lib/extractScene.mjs` ROOM_TYPES. */
+  roomType?: string;
   /** 0 = midnight, 0.5 = noon, 1 = midnight again. Tints play view. */
   daytime?: number;
   /** Items that failed to generate when the scene was composed. Surfaced
@@ -2042,7 +2047,7 @@ export default function Home() {
       // per-item failures so they surface as a badge on the scene.
       if (isScene && newIds.length > 1) {
         const sceneFailures = (data.failures as Array<{ name: string; error: string }> | undefined) || undefined;
-        await composeSceneFromAssets(prompt, newIds, updates, data.context, sceneFailures);
+        await composeSceneFromAssets(prompt, newIds, updates, data.context, sceneFailures, data.roomType);
         const sceneRec = recordSpend(currentId, estimateChatCost(), 1, "chat");
         setSessionState(sceneRec.session);
         setProjectLifetime(sceneRec.project);
@@ -2238,7 +2243,8 @@ export default function Home() {
     assetIds: string[],
     fresh: Record<string, Asset>,
     context?: "interior" | "exterior" | "aerial",
-    failedItems?: Array<{ name: string; error: string }>
+    failedItems?: Array<{ name: string; error: string }>,
+    roomType?: string
   ) {
     const items = assetIds.map((id) => fresh[id]?.prompt || "item");
     type LayoutEntry = {
@@ -2347,6 +2353,7 @@ export default function Home() {
       items: sceneItems,
       failedItems: failedItems && failedItems.length > 0 ? failedItems : undefined,
       autoBackgroundColor: autoBackgroundColorForContext(context),
+      roomType,
       createdAt: Date.now(),
     };
 

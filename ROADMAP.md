@@ -677,7 +677,7 @@ Strategy: six sub-systems. Each item is one cron fire, bounded diff.
 
 ### Room-type schema
 
-- [ ] **Room-type detection in extractScene** — extend `extractScene`
+- [x] **Room-type detection in extractScene** — extend `extractScene`
       in `app/api/generate/route.ts` to return a `roomType` field
       alongside the existing `context`: one of `bedroom | kitchen |
       bathroom | living-room | office | workshop | shop | tavern |

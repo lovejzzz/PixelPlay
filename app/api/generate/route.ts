@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { extractSceneRaw as extractSceneRawMjs } from "../../lib/extractScene.mjs";
 
 export const runtime = "nodejs";
 // 60s is Vercel Hobby's hard cap. Pro/Enterprise can raise this to 300s.
@@ -239,7 +240,7 @@ export async function POST(req: NextRequest) {
           { status: 400 }
         );
       }
-      const { items, context: sceneContext } = await extractScene(
+      const { items, context: sceneContext, roomType } = await extractScene(
         apiKey,
         body.prompt,
         body.projectMemory
@@ -349,6 +350,7 @@ export async function POST(req: NextRequest) {
         items: fulfilled,
         itemNames: items,
         context: sceneContext,
+        roomType,
         failures: failures.length > 0 ? failures : undefined,
         size: "1024x1024",
         cols: 1,
@@ -389,78 +391,29 @@ export async function POST(req: NextRequest) {
 // ------------------------------------------------------------- Scene split
 
 type SceneContext = "interior" | "exterior" | "aerial";
-type ExtractedScene = { items: string[]; context: SceneContext };
+type ExtractedScene = { items: string[]; context: SceneContext; roomType: string };
 
+/** Thin wrapper around the pure `extractSceneRaw` in app/lib/extractScene.mjs.
+ *  The pure module does the LLM call + JSON parse; this wrapper applies the
+ *  TypeScript-only `sanitizeItemDescriptor` (which depends on BACKDROPS +
+ *  the singularize helper) to the returned items and casts the context
+ *  string into the SceneContext union. */
 async function extractScene(
   key: string,
   scenePrompt: string,
   projectMemory?: string
 ): Promise<ExtractedScene> {
-  const memorySuffix =
-    projectMemory && projectMemory.trim()
-      ? `\n\nPROJECT MEMORY (the user's notes about this project — naming conventions, recurring characters, palette, etc. Treat as soft constraints when picking items):\n${projectMemory.trim().slice(0, 1500)}`
-      : "";
-  const sys =
-    "You parse a short scene description into a list of distinct, individually-renderable 2D game-asset items.\n\n" +
-    "RULE: every item must pass the COLLECTIBLE TEST — could a video-game character pick this up, walk around it, or place it in an inventory? A bed YES, a tombstone YES, a single skull YES, a treasure chest YES. The MOON no, FOG no, OCEAN WAVES no, SCATTERED BONES no (use 'a skull' instead), GROUND no (it IS the ground), SHADOW no, A SCHOOL OF FISH no (use 'one fish'), DIRT no, GRASS no (that's the background tile, not an item), SAND / SANDY BEACH no (the sand is the ground, like grass), WATER / RIVER / LAKE SURFACE no (the water is the ground/backdrop). Use 'a single seashell', 'one cactus', 'a wooden boat' instead.\n\n" +
-    "RULE: NO COLLECTIVE NOUNS for distinct objects. 'A set of chairs' NO → 'a wooden chair'. 'A pair of boots' NO → 'one leather boot'. 'A flock of birds' NO → 'one sparrow'. EXCEPTION: tied-bundle phrases that read as ONE physical asset are fine — 'a bunch of carrots' (one bundle), 'a bunch of keys' (one keyring), 'a basket of apples' (one basket), 'a crate of bottles' (one crate). 'A pile of X' only OK if it visually reads as one mound (a pile of hay = ok, a pile of snowballs = no, just say 'a snowball').\n\n" +
-    "STEP 1 — pick exactly one CONTEXT:\n" +
-    " • interior — INSIDE a room/building. Items are furniture and props.\n" +
-    " • exterior — OUTSIDE in a landscape/streetscape. Items are buildings, trees, rocks, signs, ground props.\n" +
-    " • aerial — top-down map view. Items are roof-tops, paths, ponds, small ground-level objects.\n\n" +
-    "If the prompt is ambiguous, pick the most evocative reading. Worked examples:\n" +
-    " • 'a cabin in the forest' → exterior {a wooden cabin, a pine tree, a fir tree, a rocky boulder, a wooden signpost} — NOT a bed, NOT a fireplace, NOT a chair.\n" +
-    " • 'a cozy bedroom' → interior {a bed with blankets, a nightstand, a reading lamp, a plush rug, a wooden wardrobe} — NOT the cabin's outside, NOT the front door from the street.\n" +
-    " • 'a wizard's potion shop' → interior {a bubbling cauldron, a potion shelf, a spell book, a crystal ball, a magic wand}.\n" +
-    " • 'a haunted graveyard at night' → exterior {a weathered tombstone, a rusty iron gate, a gnarled dead tree, a single skull, a stone statue, a wilted flower} — NOT 'scattered bones' (say 'a skull'), NOT 'full moon' (it's in the sky, not on the ground), NOT 'creeping fog'.\n" +
-    " • 'a pirate ship at sea' → exterior {a wooden pirate ship, a tattered jolly-roger flag, an iron cannon, a treasure chest, a wooden barrel, a rope coil} — NOT 'ocean waves' (waves are the background), NOT 'island silhouette'.\n" +
-    " • 'an underwater coral reef' → exterior {a coral fan, a single fish, a sea turtle, a starfish, a seashell, a clump of seaweed} — NOT 'school of fish'.\n\n" +
-    "STEP 2 — list 3-" + MAX_SPLIT_ITEMS + " items, each 2-6 words, each starting with 'a' or 'an' or a number. Singular nouns only. Each must pass the collectible test. No item should overlap visually with another item in the list.\n\n" +
-    `Return JSON: { "context": "interior" | "exterior" | "aerial", "items": ["a short descriptor", ...] }.` +
-    memorySuffix;
-
-  const res = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${key}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: process.env.OPENAI_CHAT_MODEL || "gpt-4o-mini",
-      messages: [
-        { role: "system", content: sys },
-        { role: "user", content: scenePrompt },
-      ],
-      response_format: { type: "json_object" },
-      temperature: 0.4,
-    }),
+  const raw = await extractSceneRawMjs(key, scenePrompt, projectMemory || "", {
+    maxItems: MAX_SPLIT_ITEMS,
+    model: process.env.OPENAI_CHAT_MODEL || "gpt-4o-mini",
   });
-
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Chat ${res.status}: ${text.slice(0, 300)}`);
-  }
-  const json = (await res.json()) as {
-    choices?: Array<{ message?: { content?: string } }>;
-  };
-  const content = json.choices?.[0]?.message?.content;
-  if (!content) return { items: [], context: "exterior" };
-  try {
-    const parsed = JSON.parse(content) as { items?: unknown; context?: unknown };
-    if (!Array.isArray(parsed.items)) return { items: [], context: "exterior" };
-    const items = parsed.items
-      .filter((x): x is string => typeof x === "string")
-      .map((s) => sanitizeItemDescriptor(s))
-      .filter((s): s is string => !!s)
-      .slice(0, MAX_SPLIT_ITEMS);
-    const context: SceneContext =
-      parsed.context === "interior" || parsed.context === "aerial"
-        ? parsed.context
-        : "exterior";
-    return { items, context };
-  } catch {
-    return { items: [], context: "exterior" };
-  }
+  const items = (raw.items as string[])
+    .map((s: string) => sanitizeItemDescriptor(s))
+    .filter((s): s is string => !!s)
+    .slice(0, MAX_SPLIT_ITEMS);
+  const context: SceneContext =
+    raw.context === "interior" || raw.context === "aerial" ? raw.context : "exterior";
+  return { items, context, roomType: raw.roomType };
 }
 
 /** Code-level guard against the failure modes the LLM keeps slipping on:
