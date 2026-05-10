@@ -80,6 +80,10 @@ export function ScenePlayer({
 
   const facingRef = useRef<"south" | "north" | "west" | "east">("south");
   const movingRef = useRef(false);
+  /** Timestamp (performance.now ms) of the last frame the player was moving.
+   *  Used by the idle-bobble at render time to decide whether the player has
+   *  been stationary long enough (>250 ms) to start the sine-wave bob. */
+  const lastMovedAtRef = useRef(0);
   const frameIdxRef = useRef(0);
   /** "Using item" window — set when E fires, cleared after USE_DURATION ms.
    *  While set, the player is frozen at frame 0, can't move, and the target
@@ -271,6 +275,7 @@ export function ScenePlayer({
       // Determine facing from movement direction.
       if (dx !== 0 || dy !== 0) {
         movingRef.current = true;
+        lastMovedAtRef.current = performance.now();
         if (Math.abs(dx) > Math.abs(dy)) {
           facingRef.current = dx > 0 ? "east" : "west";
         } else {
@@ -897,11 +902,21 @@ export function ScenePlayer({
             : npcState
             ? npcState.x
             : it.x;
-          const renderY = isPlayer
-            ? posRef.current.y
-            : npcState
-            ? npcState.y
-            : it.y;
+          // Idle bobble: when the player has been stationary for >250 ms,
+          // add a 1-unit sine-wave bob (period 1200 ms) to renderY so the
+          // sprite feels alive instead of frozen. Stops the moment they
+          // start walking again because lastMovedAtRef is updated each
+          // frame movement input is applied.
+          const idleBobble =
+            isPlayer && performance.now() - lastMovedAtRef.current > 250
+              ? Math.sin((performance.now() * Math.PI) / 600)
+              : 0;
+          const renderY =
+            (isPlayer
+              ? posRef.current.y
+              : npcState
+              ? npcState.y
+              : it.y) + idleBobble;
           const leftPct = (renderX / scene.width) * 100;
           const topPct = (renderY / scene.height) * 100;
           // Apply non-player rotation; the player stays upright. Patrol NPCs

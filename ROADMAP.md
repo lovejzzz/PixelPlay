@@ -582,7 +582,7 @@ diffs bounded, no new dependencies.
 
 ### Walking animation
 
-- [ ] **Idle bobble** — when the player has been stationary for >250 ms,
+- [x] **Idle bobble** — when the player has been stationary for >250 ms,
       add a 1px vertical sine-wave bob (period 1200 ms) to the rendered
       Y position. Stops the moment movement input arrives. Pure
       `ScenePlayer.tsx` change in the rAF tick — no new state, just a
