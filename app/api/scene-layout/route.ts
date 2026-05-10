@@ -83,9 +83,15 @@ async function gptLayout(
     `Place each item in a ${W}×${H} canvas (origin top-left, +x right, +y down) for a scene described as: "${description}".\n\n` +
     `IMPORTANT: items are rendered with BOTTOM-CENTER anchoring. The (x, y) you return is the GROUND POINT — where the item touches the floor — not its centre. So a tall tree at y=600 means the tree's BASE is at y=600 (and its leaves are above). Items "on the same ground line" share the same y. Items that visually sit ON another item (a lamp on a nightstand) should have y close to the host's TOP edge (host_y - host_height + small_overlap), not the host's center.\n\n` +
     `Each placement: { "name": "...", "x": int, "y": int, "scale": float (0.05–0.5 of the longest canvas edge), "z": int (higher = drawn on top) }.\n\n` +
+    `SCALE RUBRIC (strict — these ranges enforce relative sizes so a tree never ends up smaller than a barrel):\n` +
+    `- Trees, large buildings, towers, statues, ships: 0.25–0.40\n` +
+    `- Characters (the player, NPCs, creatures): 0.15–0.20\n` +
+    `- Mid-size props (furniture, vehicles, signs, fountains, anvils, large plants): 0.10–0.18\n` +
+    `- Small ground props (rocks, mushrooms, flowers, coins, food, bones, seashells): 0.06–0.10\n` +
+    `Worked example for "a forest with a cabin": cabin 0.35, pine tree 0.30, oak tree 0.28, mossy rock 0.10, mushroom 0.07. Note the cabin and trees are clearly larger than the ground props.\n\n` +
     `COMPOSITION RULES:\n` +
-    `- Pick ONE focal item (the largest, most-evocative item — usually a building, central character, or main prop) and place it in the upper-third center area, scaled 0.30–0.45.\n` +
-    `- All other items are supporting: scale 0.10–0.22, scattered around the focal item with natural irregular spacing. Avoid grid-aligning supporting items.\n` +
+    `- Pick ONE focal item (the largest, most-evocative item — usually a building, central character, or main prop) and place it in the upper-third center area at the TOP of its scale range.\n` +
+    `- Supporting items use the bottom-to-middle of their respective range — scattered around the focal item with natural irregular spacing. Avoid grid-aligning supporting items.\n` +
     `- Z-order: items further back (smaller y) get LOWER z; items in front (larger y) get HIGHER z. Items resting ON another item get z = parent.z + 1.\n` +
     `- Don't cram every part of the canvas — leave ~30% breathing room. Avoid items inside the bottom 8% of the canvas (looks awkward against the frame).\n` +
     `- Don't overlap two items unless one logically sits on / against / behind the other.\n\n` +
@@ -130,7 +136,9 @@ async function gptLayout(
     const name = typeof raw.name === "string" ? raw.name : items[i];
     const x = clamp(Number(raw.x) || 0, 0, W);
     const y = clamp(Number(raw.y) || 0, 0, H);
-    const scale = clamp(Number(raw.scale) || 0.2, 0.05, 0.6);
+    // Defensive clamp into [0.04, 0.5] — even if the LLM ignores the
+    // SCALE RUBRIC, no single item can dominate or vanish off-screen.
+    const scale = clamp(Number(raw.scale) || 0.2, 0.04, 0.5);
     const z = Number.isFinite(Number(raw.z)) ? Number(raw.z) : i;
     sanitized.push({ name, x, y, scale, z });
   }

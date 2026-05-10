@@ -571,7 +571,7 @@ diffs bounded, no new dependencies.
       contributes to the depth sort like any other item. NPCs already
       participate; align the player to the same scheme.
 
-- [ ] **Scale enforcement in scene-layout** — extend the
+- [x] **Scale enforcement in scene-layout** — extend the
       `gptLayout` system prompt in `app/api/scene-layout/route.ts`
       with a strict scale rubric: trees / large buildings 0.25–0.40,
       characters 0.15–0.20, mid-size props 0.10–0.18, small ground
