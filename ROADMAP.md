@@ -664,7 +664,7 @@ Strategy: six sub-systems. Each item is one cron fire, bounded diff.
       IDB) + include in project export's `assets.index.json`. No UI
       change. Build clean.
 
-- [ ] **Asset category labeling** — extend the existing /api/embed
+- [x] **Asset category labeling** — extend the existing /api/embed
       pipeline (or add a sibling `/api/classify` route) to also
       return a category for each generated asset: one of
       `bedding | seating | table | storage | kitchen | electronics |

@@ -112,6 +112,13 @@ type Asset = {
    *  sprites with unpredictable transparent padding — a "lamp" might be
    *  90% sprite + 10% padding, or 60% sprite + 40% padding). */
   bounds?: import("./lib/sprites").SpriteBounds;
+  /** Coarse semantic label used by Phase 14 room-type validation +
+   *  surface-aware placement. One of the values exported by
+   *  `app/lib/classify.mjs` (bedding, seating, table, storage, kitchen,
+   *  electronics, decor, clothing, tool, book, food, plant, container,
+   *  lighting, art, toy, weapon, vehicle, other). Auto-filled by
+   *  classifyAssets() after generation. */
+  category?: string;
 };
 
 type ProjectStyle = {
@@ -1343,6 +1350,47 @@ export default function Home() {
     }
   }
 
+  /** Fire-and-forget category labeling for newly-created assets. Sends
+   *  the batched `name + prompt` texts to /api/classify and writes the
+   *  returned label onto Asset.category. Used downstream by Phase 14
+   *  room-type validation + surface-aware placement. Quiet failure:
+   *  any error leaves category undefined and the heuristic on the
+   *  server already supplies a best-effort label even without a key. */
+  async function classifyAssets(ids: string[]) {
+    if (ids.length === 0) return;
+    const samples = ids
+      .map((id) => {
+        const a = assets[id];
+        if (!a || a.category) return null;
+        const text = [a.name || "", a.prompt || ""].filter(Boolean).join(". ").slice(0, 200);
+        return text ? { id, text } : null;
+      })
+      .filter((x): x is { id: string; text: string } => !!x);
+    if (samples.length === 0) return;
+    try {
+      const res = await fetch("/api/classify", {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({ texts: samples.map((s) => s.text) }),
+      });
+      if (!res.ok) return;
+      const data = (await res.json()) as { categories?: string[] };
+      const cats = data.categories || [];
+      if (cats.length !== samples.length) return;
+      setAssets((a) => {
+        const next = { ...a };
+        samples.forEach((s, i) => {
+          if (next[s.id] && typeof cats[i] === "string") {
+            next[s.id] = { ...next[s.id], category: cats[i] };
+          }
+        });
+        return next;
+      });
+    } catch {
+      /* silent — feature degrades to "category undefined" */
+    }
+  }
+
   /** Fire-and-forget bounds analysis for newly-created assets. Mirrors
    *  embedAssets — runs async after generation, writes the result back
    *  via setAssets. Used by the relation resolver to snap stacked items
@@ -1943,6 +1991,10 @@ export default function Home() {
       // edge instead of guessing from scale.
       void analyzeBoundsForAssets(newIds);
 
+      // Fire-and-forget category labeling — feeds the Phase 14
+      // room-type validation + surface-aware placement.
+      void classifyAssets(newIds);
+
       // Variety check for multi-frame sheets.
       if (cols * rows > 1) {
         for (const [id, asset] of Object.entries(updates)) {
@@ -2147,6 +2199,7 @@ export default function Home() {
       setAssets((a) => ({ ...a, [id]: newAsset }));
       void embedAssets([id]);
       void analyzeBoundsForAssets([id]);
+      void classifyAssets([id]);
       const editSpend = route.isFal
         ? (typeof data.cost === "number" ? data.cost : 0)
         : estimateImageCost(quality, "1024x1024", 1);
@@ -3455,6 +3508,7 @@ export default function Home() {
         tags: asset.tags || [],
         createdAt: asset.createdAt,
         ...(asset.bounds ? { bounds: asset.bounds } : {}),
+        ...(asset.category ? { category: asset.category } : {}),
       });
       const cols = asset.cols || 1;
       const rows = asset.rows || 1;
@@ -3650,6 +3704,7 @@ export default function Home() {
       tags?: string[];
       createdAt?: number;
       bounds?: { top: number; bottom: number; left: number; right: number };
+      category?: string;
     };
     const indexJson = await indexFile.async("string");
     let assetIndex: IndexEntry[];
@@ -3717,6 +3772,9 @@ export default function Home() {
         typeof entry.bounds.left === "number" &&
         typeof entry.bounds.right === "number"
           ? { bounds: entry.bounds }
+          : {}),
+        ...(typeof entry.category === "string" && entry.category.length > 0
+          ? { category: entry.category }
           : {}),
       };
       oldIdToNewId.set(entry.id, newId);
