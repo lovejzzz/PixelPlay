@@ -635,6 +635,118 @@ diffs bounded, no new dependencies.
 
 ---
 
+## Phase 14 — Unpacking-level composition
+
+Driven by the May 10 playtest: scene composition doesn't deeply
+understand the visible bounds and category of generated items. The
+relation system from playtest fire #aa87ca5 lays positions logically
+but uses `scale × longest` to estimate host height — which is wrong
+when gpt-image-1 returns a sprite with transparent padding (lamp
+floats above the actual nightstand top edge).
+
+Target: rooms that LOOK like a hand-composed Unpacking room — items
+on real surfaces, categorically appropriate, no floaters. We won't
+match Witch Beam's hand-tuned aesthetic, but we can close the gap on
+positioning correctness.
+
+Strategy: six sub-systems. Each item is one cron fire, bounded diff.
+
+### Bounds & categories — foundation
+
+- [ ] **Sprite-bounds analysis** — after a successful image generation,
+      run a small canvas pixel-analysis to find the bounding box of
+      the non-transparent content. Store as `Asset.bounds = { top,
+      bottom, left, right }` (fractions 0–1 of the image dimensions).
+      Plumb the analysis through `app/lib/sprites.ts` (new helper
+      `analyzeBounds(dataUrl)`) and call it in the image-arrives
+      handlers in `app/page.tsx` (handleSubmit + editAssetInline +
+      composeSceneFromAssets paths). Persist on Asset (already in
+      IDB) + include in project export's `assets.index.json`. No UI
+      change. Build clean.
+
+- [ ] **Asset category labeling** — extend the existing /api/embed
+      pipeline (or add a sibling `/api/classify` route) to also
+      return a category for each generated asset: one of
+      `bedding | seating | table | storage | kitchen | electronics |
+      decor | clothing | tool | book | food | plant | container |
+      lighting | art | toy | weapon | vehicle | other`. Run as one
+      cheap gpt-4o-mini chat completion per batch (so the bulk
+      generation of 5 items is one chat call, ~$0.0003). Store as
+      `Asset.category?: string`. Fall back gracefully when the API
+      key is absent. Persist + export.
+
+### Room-type schema
+
+- [ ] **Room-type detection in extractScene** — extend `extractScene`
+      in `app/api/generate/route.ts` to return a `roomType` field
+      alongside the existing `context`: one of `bedroom | kitchen |
+      bathroom | living-room | office | workshop | shop | tavern |
+      potion-shop | blacksmith-forge | wizard-study | forest |
+      meadow | desert | beach | mountain | dungeon | cave | other`.
+      Add worked examples teaching the model to pick the type.
+      Pipe roomType back through the response and persist on the
+      created Scene record (new `Scene.roomType?: string` field).
+
+- [ ] **Room-type category whitelist** — new `app/lib/roomCategories.ts`
+      exports `ROOM_CATEGORIES: Record<RoomType, Category[]>` defining
+      which item categories naturally belong in which room types
+      (bedroom → bedding/lighting/decor/clothing/book/electronics;
+      kitchen → kitchen/food/container/lighting/storage; etc.).
+      Pure data, no runtime logic yet — used by the validation pass
+      below.
+
+### Surface-aware placement
+
+- [ ] **Surface-aware relation resolver (client-side rewrite)** — move
+      the relation-resolution logic from `/api/scene-layout/route.ts`
+      to a new client-side helper `app/lib/resolveRelation.ts` that
+      can access `Asset.bounds`. Server still parses + validates the
+      `relation` field and returns it alongside raw (x, y, z). Client,
+      in `composeSceneFromAssets`, calls `resolveRelation(item,
+      hostItem, hostAsset, childAsset)` to compute the actual snap
+      position using both items' bounds. For "on": child's foot lands
+      at `host.y - (host.height_via_bounds) + small_overlap`. For
+      "beside": child's center is offset by `(host.width_via_bounds +
+      child.width_via_bounds) / 2`. Defensive fallback to the
+      scale-based math when bounds are missing (legacy assets).
+
+### Validation
+
+- [ ] **Item-room validation badge** — after `composeSceneFromAssets`
+      creates a scene, walk its items and check each asset's category
+      against the scene's roomType whitelist. Items that don't match
+      get a yellow "⚠ unusual for this room" badge in the hierarchy
+      panel. Doesn't auto-drop them (the LLM may know something
+      contextual), just surfaces the mismatch so users can fix.
+      Track count in `Scene.unusualItemCount` (recomputed each time
+      items change).
+
+### Polish
+
+- [ ] **Multi-anchor surfaces per asset (stretch)** — for assets in
+      categories that conceptually have multiple usable surfaces
+      (storage / seating / table / counter), add a one-time second
+      chat call after generation: "looking at this descriptor, list
+      the named placement zones a player could put items on, as
+      bbox fractions of the image." Returns `Asset.anchors?: Array<{
+      name: string; x: number; y: number; w: number; h: number }>`.
+      The resolver picks the most-appropriate anchor when applying
+      "on" relations based on the child's category (lamp → top
+      surface, book → top surface, drawer-pull → side surface).
+      Defensive: empty anchors fall back to the bounds-derived top.
+
+- [ ] **Snap-feedback in edit mode** — when the user drags an item in
+      `SceneCanvas` and hovers near another item's known surface
+      (using its bounds), show a thin green outline on the snap
+      zone. On pointerup-near-zone, the item's position is adjusted
+      to the snap position (and a `relationTo` link is auto-created
+      between the dragged item and its host). Small sound effect
+      via the existing audio infrastructure. Pure UX layer over the
+      bounds + categories systems above — depends on them landing
+      first.
+
+---
+
 ## When everything in every phase is checked
 
 - Append a "ALL PHASES COMPLETE" entry to `CRON-LOG.md` with the date.
