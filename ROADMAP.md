@@ -613,7 +613,7 @@ diffs bounded, no new dependencies.
 
 ### Art consistency
 
-- [ ] **Style reference threaded through every split-items call** —
+- [x] **Style reference threaded through every split-items call** —
       audit `composeSceneFromAssets` and the split-items branch of
       `app/api/generate/route.ts`: every per-item image-gen call
       should receive the project's `referenceUrls` (style ref + any

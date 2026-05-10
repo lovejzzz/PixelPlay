@@ -272,9 +272,28 @@ export async function POST(req: NextRequest) {
       // subsequent item (chained in parallel). This costs the same number of
       // image-gens but trades ~20s of wall-clock for visually consistent
       // assets across the scene.
+      //
+      // Reference-URL flow (audited fire #74):
+      // - `baseRefs` (= body.referenceUrls || []) is the project's style
+      //   reference if the user has uploaded one; threaded into EVERY split-
+      //   items call so every asset shares that visual anchor.
+      // - First item: refs = baseRefs. Establishes the scene's look using
+      //   only the project's style reference (no chain yet).
+      // - Items 2..N: refs = [styleAnchorUrl, ...baseRefs]. The anchor URL
+      //   is prepended so gpt-image-1 weights the first-item's appearance
+      //   most heavily, then falls back to the project ref. If the first
+      //   call fails (styleAnchorUrl stays null), the rest still receive
+      //   baseRefs — they degrade to "project ref only" rather than to
+      //   "no ref at all".
       const fulfilled: Array<{ name: string; url: string }> = [];
       const failures: Array<{ name: string; error: string }> = [];
-      const baseRefs = body.referenceUrls || [];
+      // Filter empty/falsy entries defensively — the client's
+      // referenceUrls may include a stale undefined or empty string from
+      // an unset projectStyle.refUrl in some edge cases. Passing those
+      // through would make /v1/images/edits return a 400.
+      const baseRefs = (body.referenceUrls || []).filter(
+        (u): u is string => typeof u === "string" && u.length > 0
+      );
       let styleAnchorUrl: string | null = null;
       try {
         const firstUrls = await generateOpenAI(apiKey, {
