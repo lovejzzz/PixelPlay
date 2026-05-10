@@ -4,6 +4,16 @@ import JSZip from "jszip";
  * Slices a sprite-sheet image into rows × cols frames and returns each as a
  * data URL (PNG). The sheet is assumed to have evenly-spaced cells filling
  * the entire image.
+ *
+ * Robustness pass: gpt-image-1 occasionally returns a 4-cell row in what's
+ * supposed to be a 4×4 sheet (the bottom rows are blank/transparent). If we
+ * naively slice a 4×4 grid we get 12 garbage frames. Before slicing, we
+ * count which cells have any non-transparent pixels in their centre 50%.
+ * When only the first row has content, we slice as 1×cols (the actual
+ * data) and TILE the result to fill the requested cols×rows shape so
+ * callers still get a frames[] of the expected length — they just see the
+ * same row's sprites for every "direction". Falls back to the original
+ * shape on any ambiguity (e.g. partially-filled rows, single-row sheets).
  */
 export async function sliceSheet(
   url: string,
@@ -11,12 +21,15 @@ export async function sliceSheet(
   rows: number
 ): Promise<string[]> {
   const img = await loadImage(url);
-  const frameW = img.naturalWidth / cols;
-  const frameH = img.naturalHeight / rows;
+  const detected = detectActualLayout(img, cols, rows);
+  const sliceC = detected.cols;
+  const sliceR = detected.rows;
+  const frameW = img.naturalWidth / sliceC;
+  const frameH = img.naturalHeight / sliceR;
 
-  const frames: string[] = [];
-  for (let r = 0; r < rows; r++) {
-    for (let c = 0; c < cols; c++) {
+  const sliced: string[] = [];
+  for (let r = 0; r < sliceR; r++) {
+    for (let c = 0; c < sliceC; c++) {
       const canvas = document.createElement("canvas");
       canvas.width = Math.round(frameW);
       canvas.height = Math.round(frameH);
@@ -33,10 +46,80 @@ export async function sliceSheet(
         canvas.width,
         canvas.height
       );
-      frames.push(canvas.toDataURL("image/png"));
+      sliced.push(canvas.toDataURL("image/png"));
     }
   }
-  return frames;
+  if (sliceC === cols && sliceR === rows) return sliced;
+  // Detected a smaller actual layout — tile the slice into the requested
+  // shape so the array length is cols*rows for downstream code that
+  // indexes by row/col. Every "row" gets the corresponding row in the
+  // smaller actual layout (modulo). For 1×cols → cols×rows, this means
+  // every row shows the same walk-cycle, but the cycle still animates.
+  const out: string[] = [];
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const sr = r % sliceR;
+      const sc = c % sliceC;
+      out.push(sliced[sr * sliceC + sc]);
+    }
+  }
+  return out;
+}
+
+/** Inspect each requested cell's centre 50% for any non-transparent
+ *  pixels. If only the top row is populated in a multi-row sheet,
+ *  treat the actual layout as 1×cols. Falls back to the requested
+ *  shape on any ambiguity (canvas read failures, partial fills, etc.). */
+function detectActualLayout(
+  img: HTMLImageElement,
+  cols: number,
+  rows: number
+): { cols: number; rows: number } {
+  if (rows < 2 || cols < 1) return { cols, rows };
+  const off = document.createElement("canvas");
+  off.width = img.naturalWidth;
+  off.height = img.naturalHeight;
+  const ctx = off.getContext("2d", { willReadFrequently: true });
+  if (!ctx) return { cols, rows };
+  try {
+    ctx.drawImage(img, 0, 0);
+  } catch {
+    return { cols, rows };
+  }
+  const frameW = img.naturalWidth / cols;
+  const frameH = img.naturalHeight / rows;
+  const filledRow: boolean[] = new Array(rows).fill(false);
+  for (let r = 0; r < rows; r++) {
+    let rowHasContent = false;
+    for (let c = 0; c < cols && !rowHasContent; c++) {
+      const cx0 = Math.round(c * frameW + frameW * 0.25);
+      const cy0 = Math.round(r * frameH + frameH * 0.25);
+      const cw = Math.max(2, Math.round(frameW * 0.5));
+      const ch = Math.max(2, Math.round(frameH * 0.5));
+      let data: Uint8ClampedArray;
+      try {
+        data = ctx.getImageData(cx0, cy0, cw, ch).data;
+      } catch {
+        return { cols, rows };
+      }
+      // Threshold the alpha channel so anti-aliased edges of an
+      // otherwise-empty cell don't register.
+      for (let i = 3; i < data.length; i += 4) {
+        if (data[i] > 16) {
+          rowHasContent = true;
+          break;
+        }
+      }
+    }
+    filledRow[r] = rowHasContent;
+  }
+  const filledCount = filledRow.filter(Boolean).length;
+  // Re-slice as 1 × cols when only the FIRST row has content. Other
+  // partial-fill patterns are too ambiguous to remap safely.
+  if (filledCount === 1 && filledRow[0]) {
+    return { cols, rows: 1 };
+  }
+  return { cols, rows };
 }
 
 /**

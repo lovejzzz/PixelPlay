@@ -595,7 +595,7 @@ diffs bounded, no new dependencies.
       just below the sprite as part of the same draw layer so it
       moves with the character. Adds depth without any new images.
 
-- [ ] **Walk-cycle slicing robustness** — `sliceSheet` in
+- [x] **Walk-cycle slicing robustness** — `sliceSheet` in
       `app/lib/sprites.ts` currently assumes the LLM-returned sprite
       sheet is laid out exactly cols × rows. When the model returns a
       4-cell row in a 4×4 sheet (e.g. blank rows 2–4), the slice is
