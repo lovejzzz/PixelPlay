@@ -2194,7 +2194,10 @@ export default function Home() {
         scale: placement?.scale ?? 0.2,
         z: placement?.z ?? i,
         animating: isMultiFrame,
-        solid: defaultSolid(asset.assetType),
+        // Solid by assetType OR by blocker-keyword name match — so a
+        // generated tree / cabin / statue blocks the player even when
+        // its assetType is "item".
+        solid: defaultSolid(asset.assetType) || defaultSolidForName(itemName) || defaultSolidForName(asset.name),
         // Composed scenes use bottom-anchor so cabins/trees/characters all
         // sit on the same ground line. Floating items (moons, lanterns,
         // birds) override to center so the y is read as their middle.
@@ -2246,7 +2249,9 @@ export default function Home() {
         scale: 0.2,
         z: maxZ + 1,
         animating: isMultiFrame,
-        solid: defaultSolid(a.assetType),
+        // Same blocker-keyword logic as the split-items compose path so
+        // dragging a tree / cabin onto a scene also makes it solid.
+        solid: defaultSolid(a.assetType) || defaultSolidForName(a.prompt) || defaultSolidForName(a.name),
         anchor: inferredAnchor,
       };
       return { ...s, items: [...s.items, newItem] };
@@ -9060,6 +9065,38 @@ function defaultSolid(t: AssetType): boolean {
   // Items, UI icons, and characters are passable.
   return t === "building" || t === "creature";
 }
+
+/** Name-based blocker check — items whose descriptor contains a known
+ *  "blocks the player" keyword (a tree, a cabin, a statue, a fountain,
+ *  ...) become solid even when their assetType wouldn't trigger it.
+ *  The motivation: a "tree" generated as assetType "item" should still
+ *  block the player walking into it. Caller can OR this with the
+ *  assetType-based `defaultSolid()` for the final value. */
+function defaultSolidForName(name: string | undefined): boolean {
+  if (!name) return false;
+  const s = name.toLowerCase();
+  // Whole-word match against a curated keyword list. Use a regex with
+  // word boundaries so "store" doesn't trigger on "tower", etc.
+  return BLOCKER_KEYWORDS.some((k) => new RegExp(`\\b${k}\\b`, "i").test(s));
+}
+
+const BLOCKER_KEYWORDS = [
+  // Architecture / structures
+  "cabin", "house", "cottage", "shack", "hut", "building", "tower",
+  "shop", "store", "tavern", "barn", "shed", "windmill", "lighthouse",
+  // Monuments / props that occupy ground space
+  "statue", "fountain", "obelisk", "pillar", "column", "shrine",
+  "gravestone", "tombstone", "headstone", "altar",
+  // Trees / large vegetation
+  "tree", "pine", "oak", "fir", "spruce", "birch", "willow", "palm",
+  "bush", "shrub",
+  // Rocks / boulders
+  "boulder", "rock", "stone wall",
+  // Heavy interior furniture (you can walk around but not through)
+  "anvil", "workbench", "forge", "cauldron", "fireplace", "hearth",
+  "dresser", "wardrobe", "armoire", "bookshelf", "bookcase",
+  "bed", "sofa", "couch", "piano", "throne", "desk", "table",
+];
 
 /** Procedural 32×32 grass tile so every fresh scene has visible ground
  *  even before the user generates a real tile asset. */

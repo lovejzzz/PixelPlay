@@ -553,7 +553,7 @@ diffs bounded, no new dependencies.
       `ScenePlayer.tsx` reads it and renders it as the bottom layer
       under any tile grid layers.
 
-- [ ] **Auto-solid for blocker items** — when split-items composes a
+- [x] **Auto-solid for blocker items** — when split-items composes a
       scene, auto-set `solid: true` on items whose name matches a
       "blocks the player" keyword list (cabin, house, building,
       tower, statue, fountain, tree, pine, oak, fir, boulder, rock,
