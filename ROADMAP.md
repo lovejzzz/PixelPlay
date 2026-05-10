@@ -563,7 +563,7 @@ diffs bounded, no new dependencies.
       it from the split-items asset-create path. Don't override
       explicit user-set values.
 
-- [ ] **Y-sort player into the painter list** — `ScenePlayer.tsx`
+- [x] **Y-sort player into the painter list** — `ScenePlayer.tsx`
       currently renders the player separately from `sortedItems`. Fold
       the player into the same painter pass (sorted by `y +
       spriteHeight`), so a tree behind the player draws first, in

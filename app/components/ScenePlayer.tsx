@@ -690,12 +690,25 @@ export function ScenePlayer({
   // player is moving west.
   const flipX = rows === 1 && cols === 4 && facingRef.current === "west";
 
-  // Render order — sort items by z, but draw the player at its computed pos.
+  // Render order — y-sort painter algorithm. An item's depth is the
+  // bottom edge of its sprite in scene coordinates: items "lower" on
+  // screen draw on top of items "higher" up, so a tree behind the
+  // player draws first and a tree in front draws over. The player and
+  // moving NPCs use their RUNTIME y (posRef / npcStateRef) so they
+  // re-stack as they walk; static items use their authored y. Items
+  // anchored "bottom" already have y at the foot, so depth = y;
+  // "center"-anchored items add half their approximate sprite height.
   // pickedTick is read here to ensure re-render when a pickup happens.
   void pickedTick;
+  const depthOf = (it: PlayerSceneItem): number => {
+    const isP = it.id === character.id;
+    const ns = !isP && it.patrol ? npcStateRef.current.get(it.id) : undefined;
+    const baseY = isP ? posRef.current.y : ns ? ns.y : it.y;
+    return it.anchor === "bottom" ? baseY : baseY + it.scale * longest * 0.5;
+  };
   const sortedItems = [...scene.items]
     .filter((it) => !pickedIdsRef.current.has(it.id))
-    .sort((a, b) => a.z - b.z);
+    .sort((a, b) => depthOf(a) - depthOf(b));
 
   // The viewport "camera" centers on the player. We move the inner content,
   // not the outer frame.
@@ -924,7 +937,11 @@ export function ScenePlayer({
                 left: `${leftPct}%`,
                 top: `${topPct}%`,
                 width: `${widthPct}%`,
-                zIndex: it.z,
+                // y-sort painter — depth-based zIndex so the player and
+                // moving NPCs correctly stack with static items as they
+                // walk past each other. Same depth function as the sort
+                // above; integer-rounded for the CSS zIndex.
+                zIndex: Math.round(depthOf(it)),
                 transform: (() => {
                   const baseT =
                     it.anchor === "bottom"
