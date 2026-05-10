@@ -6712,6 +6712,7 @@ function ScenesView({
       cols: a.cols,
       rows: a.rows,
       sourceSize: a.sourceSize,
+      assetType: a.assetType,
     };
   }
   const selectedAsset = selectedSceneItem ? assets[selectedSceneItem.assetId] : null;

@@ -11,6 +11,10 @@ export type CanvasAsset = {
   rows: number;
   /** "WxH" of the source. */
   sourceSize: string;
+  /** Optional — only used by ScenePlayer to decide which sprites get a
+   *  shadow ellipse (character / creature in Play mode). Kept loose
+   *  (`string`) so this module stays decoupled from page.tsx's AssetType. */
+  assetType?: string;
 };
 
 export type CanvasItem = {

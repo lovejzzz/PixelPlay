@@ -968,6 +968,31 @@ export function ScenePlayer({
                   it.anchor === "bottom" ? "50% 100%" : "50% 50%",
               }}
             >
+              {/* Soft shadow ellipse under any character/creature sprite
+                  (player, patrol NPCs, plain character items in Play
+                  mode). Rendered before the img so DOM order keeps it
+                  visually beneath. ~60% sprite width, ~14% sprite
+                  height; soft fade-out via radial-gradient gives the
+                  blur look without a CSS filter. Adds a real depth
+                  cue without needing any new image assets. */}
+              {(isPlayer ||
+                npcState !== undefined ||
+                a.assetType === "character" ||
+                a.assetType === "creature") && (
+                <div
+                  className="absolute pointer-events-none"
+                  style={{
+                    left: "50%",
+                    bottom: 0,
+                    width: "60%",
+                    height: "14%",
+                    transform: "translate(-50%, 50%)",
+                    background:
+                      "radial-gradient(ellipse, rgba(0,0,0,0.28) 0%, rgba(0,0,0,0) 70%)",
+                    borderRadius: "50%",
+                  }}
+                />
+              )}
               <img
                 src={imgSrc}
                 alt=""

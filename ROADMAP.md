@@ -588,7 +588,7 @@ diffs bounded, no new dependencies.
       `ScenePlayer.tsx` change in the rAF tick — no new state, just a
       `Math.sin(performance.now() * ...)` offset applied at render time.
 
-- [ ] **Player + NPC shadow ellipses** — render a soft dark ellipse
+- [x] **Player + NPC shadow ellipses** — render a soft dark ellipse
       under each character sprite (player, NPC, any character item
       while in Play mode). 60% sprite width, 14% sprite height, 28%
       black, slight blur via `radial-gradient` background. Renders
