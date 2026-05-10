@@ -49,6 +49,12 @@ export type CanvasItem = {
   /** Render anchor. "bottom" → render with translate(-50%, -100%) so the
    *  item's feet sit at (x, y); "center" → translate(-50%, -50%) (legacy). */
   anchor?: "bottom" | "center";
+  /** Compositional relationship to another item in the same scene. Used
+   *  by ScenePlayer's y-sort to override pure-y depth so a lamp on a
+   *  nightstand draws OVER the nightstand even though it sits visually
+   *  higher (smaller y) on screen. */
+  relationTo?: string;
+  relationWhere?: "on" | "above" | "beside" | "in-front";
   /** Optional alt-asset id for the brief "use" state in Play mode. */
   useStateAssetId?: string;
 };

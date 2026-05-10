@@ -5,6 +5,17 @@ export const maxDuration = 30;
 
 type LayoutItem = { name: string; x: number; y: number; scale: number; z: number };
 type SceneContext = "interior" | "exterior" | "aerial";
+
+/** Relationship between two items in a scene. The model populates this
+ *  whenever items naturally rest on, hang above, sit beside, or stand in
+ *  front of each other; the resolver below converts the relation into
+ *  concrete (x, y, z) overrides so a lamp described as "on a nightstand"
+ *  actually lands on top of the nightstand instead of next to it. */
+type LayoutRelation = {
+  /** Name of the host item (must match another entry in the items list). */
+  to: string;
+  where: "on" | "above" | "beside" | "in-front";
+};
 type Body = {
   sceneDescription: string;
   items: string[];
@@ -73,7 +84,7 @@ async function gptLayout(
   H: number,
   context: SceneContext,
   projectMemory?: string
-): Promise<LayoutItem[]> {
+): Promise<Array<LayoutItem & { relation?: LayoutRelation }>> {
   const memorySuffix =
     projectMemory && projectMemory.trim()
       ? `\n\nPROJECT MEMORY (the user's notes about this project — recurring characters, palette, layout preferences. Treat as soft constraints):\n${projectMemory.trim().slice(0, 1500)}`
@@ -82,7 +93,17 @@ async function gptLayout(
     `You are a 2D pixel-art scene layout assistant.\n\n` +
     `Place each item in a ${W}×${H} canvas (origin top-left, +x right, +y down) for a scene described as: "${description}".\n\n` +
     `IMPORTANT: items are rendered with BOTTOM-CENTER anchoring. The (x, y) you return is the GROUND POINT — where the item touches the floor — not its centre. So a tall tree at y=600 means the tree's BASE is at y=600 (and its leaves are above). Items "on the same ground line" share the same y. Items that visually sit ON another item (a lamp on a nightstand) should have y close to the host's TOP edge (host_y - host_height + small_overlap), not the host's center.\n\n` +
-    `Each placement: { "name": "...", "x": int, "y": int, "scale": float (0.05–0.5 of the longest canvas edge), "z": int (higher = drawn on top) }.\n\n` +
+    `Each placement: { "name": "...", "x": int, "y": int, "scale": float (0.05–0.5 of the longest canvas edge), "z": int (higher = drawn on top), "relation"?: { "to": "<other-item-name>", "where": "on" | "above" | "beside" | "in-front" } }.\n\n` +
+    `RELATIONSHIPS (USE THESE — they're the difference between a lamp on the floor next to a nightstand vs a lamp on top of the nightstand):\n` +
+    `Items that NATURALLY rest on / hang above / touch the side of / stand in front of another item must declare it via the optional "relation" field. The "to" must EXACTLY match the name of another item in this layout (case sensitive).\n` +
+    `- "on" — the item rests on top of the host's surface (lamp on nightstand, candle on table, vase on dresser, mug on workbench, book on shelf, plate on stove, jar on countertop). Resolver places it at the host's top edge with proper z-stacking.\n` +
+    `- "above" — the item hangs / floats higher than the host but is contextually associated with it (painting above bed, banner above throne, lantern above table, sign above shop door).\n` +
+    `- "beside" — the item touches one side of the host along the same ground line (chair beside table, barrel beside crate, NPC beside cauldron). The resolver picks an open side automatically.\n` +
+    `- "in-front" — the item stands a small step closer to the camera than the host (rug in front of bed, footstool in front of armchair, market stall in front of shop building).\n` +
+    `Items that genuinely belong "next to" but not against another item — like a tree near a cabin, or a barrel a few paces from a stall — should NOT use a relation; just place them with x/y. The relation field is for tight contact, not loose proximity.\n` +
+    `One worked example for "a cozy bedroom": bed (focal, no relation, scale 0.30), nightstand {relation: {to: "bed", where: "beside"}, scale 0.13}, lamp {relation: {to: "nightstand", where: "on"}, scale 0.06}, painting {relation: {to: "bed", where: "above"}, scale 0.10}, rug {relation: {to: "bed", where: "in-front"}, scale 0.18}.\n` +
+    `One worked example for "a wizard's potion shop": cauldron (focal, no relation, scale 0.28), shelf {relation: {to: "cauldron", where: "beside"}, scale 0.22}, potion bottle {relation: {to: "shelf", where: "on"}, scale 0.08}, spell book {relation: {to: "cauldron", where: "beside"}, scale 0.10}.\n` +
+    `IMPORTANT: even when you set a relation, ALSO provide reasonable x/y/z fallback values — the resolver only overrides when the host is found, otherwise your fallback is used.\n\n` +
     `SCALE RUBRIC (strict — these ranges enforce relative sizes so a tree never ends up smaller than a barrel):\n` +
     `- Trees, large buildings, towers, statues, ships: 0.25–0.40\n` +
     `- Characters (the player, NPCs, creatures): 0.15–0.20\n` +
@@ -96,7 +117,7 @@ async function gptLayout(
     `- Don't cram every part of the canvas — leave ~30% breathing room. Avoid items inside the bottom 8% of the canvas (looks awkward against the frame).\n` +
     `- Don't overlap two items unless one logically sits on / against / behind the other.\n\n` +
     CONTEXT_RULES[context] +
-    `\n\nReturn JSON: { "items": [{"name": "...", "x": int, "y": int, "scale": float, "z": int}, ...] } using the EXACT item names provided.` +
+    `\n\nReturn JSON: { "items": [{"name": "...", "x": int, "y": int, "scale": float, "z": int, "relation"?: { "to": "<host-name>", "where": "on" | "above" | "beside" | "in-front" }}, ...] } using the EXACT item names provided.` +
     memorySuffix;
 
   const userMsg = `Items: ${JSON.stringify(items)}`;
@@ -129,9 +150,15 @@ async function gptLayout(
   }
   if (!Array.isArray(parsed.items)) return [];
 
-  const sanitized: LayoutItem[] = [];
+  // First pass — sanitize each entry, including the optional relation.
+  // Items with a valid relation get resolved AFTER this loop so we have
+  // the full lookup table by name available.
+  type SanitizedItem = LayoutItem & { relation?: LayoutRelation };
+  const sanitized: SanitizedItem[] = [];
   for (let i = 0; i < parsed.items.length && i < MAX_ITEMS; i++) {
-    const raw = parsed.items[i] as Partial<LayoutItem> | undefined;
+    const raw = parsed.items[i] as
+      | (Partial<LayoutItem> & { relation?: Partial<LayoutRelation> })
+      | undefined;
     if (!raw) continue;
     const name = typeof raw.name === "string" ? raw.name : items[i];
     const x = clamp(Number(raw.x) || 0, 0, W);
@@ -140,20 +167,90 @@ async function gptLayout(
     // SCALE RUBRIC, no single item can dominate or vanish off-screen.
     const scale = clamp(Number(raw.scale) || 0.2, 0.04, 0.5);
     const z = Number.isFinite(Number(raw.z)) ? Number(raw.z) : i;
-    sanitized.push({ name, x, y, scale, z });
+    const relation = parseRelation(raw.relation);
+    sanitized.push({ name, x, y, scale, z, ...(relation ? { relation } : {}) });
+  }
+
+  // Second pass — resolve relations into concrete (x, y, z) overrides.
+  // Single-pass only: if a host itself has a relation, we still anchor to
+  // the host's RAW (LLM-supplied) position to avoid two-step chain drift.
+  const byName = new Map<string, SanitizedItem>();
+  for (const it of sanitized) byName.set(it.name, it);
+  const longest = Math.max(W, H);
+  for (const it of sanitized) {
+    if (!it.relation) continue;
+    const host = byName.get(it.relation.to);
+    // Bail out if host is missing or self-reference; fall back to LLM xy.
+    if (!host || host.name === it.name) {
+      delete it.relation;
+      continue;
+    }
+    const hostHeight = host.scale * longest;
+    const hostHalfW = (host.scale * longest) / 2;
+    const itemHalfW = (it.scale * longest) / 2;
+    switch (it.relation.where) {
+      case "on": {
+        // Sit on the host's TOP edge. y is the foot in our anchor model;
+        // overlap by ~10% of host height so the item visually rests rather
+        // than floats. Same x as host. z = host.z + 1 so the item draws
+        // over the host even when y-sort would tie them.
+        it.x = clamp(host.x, 0, W);
+        it.y = clamp(host.y - hostHeight * 0.9, 0, H);
+        it.z = host.z + 1;
+        break;
+      }
+      case "above": {
+        // Float clearly above the host with a small gap. Same x.
+        it.x = clamp(host.x, 0, W);
+        it.y = clamp(host.y - hostHeight - hostHeight * 0.25, 0, H);
+        it.z = host.z + 1;
+        break;
+      }
+      case "beside": {
+        // Touch the host along the same ground line. Pick the side with
+        // more room — if host is past canvas centre, place LEFT; else RIGHT.
+        const placeRight = host.x < W / 2;
+        const sideX = placeRight ? host.x + hostHalfW + itemHalfW : host.x - hostHalfW - itemHalfW;
+        it.x = clamp(sideX, 0, W);
+        it.y = host.y;
+        it.z = host.z; // same depth, beside does not stack
+        break;
+      }
+      case "in-front": {
+        // One small step closer to the camera. Same x. z = host.z + 1
+        // (always in front in stacking order).
+        it.x = clamp(host.x, 0, W);
+        it.y = clamp(host.y + hostHeight * 0.15, 0, H);
+        it.z = host.z + 1;
+        break;
+      }
+    }
   }
 
   // Painters-algorithm post-process: re-sort z by ground y so items further
   // back (smaller y) draw under items in front (larger y). gpt-4o-mini gets
   // local attachment z right (lamp on table) but not the global ordering;
   // doing it server-side guarantees correct depth without a second LLM
-  // round-trip. Preserves the model's ATTACHMENT bumps by adding a tiny
-  // perturbation per attachment level (rare, since most items are unstacked).
-  const sortedByY = [...sanitized]
+  // round-trip. Items with a relation are SKIPPED — their z is dictated
+  // by the host's z + 1 and their on-screen depth is overridden in the
+  // Player's y-sort, which walks the relation to inherit host depth.
+  const standalone = sanitized.filter((it) => !it.relation);
+  const sortedByY = [...standalone]
     .map((it, idx) => ({ it, idx, attachBump: it.z }))
     .sort((a, b) => a.it.y - b.it.y || a.it.z - b.it.z);
   for (let i = 0; i < sortedByY.length; i++) {
     sortedByY[i].it.z = i * 10 + (sortedByY[i].attachBump > 0 ? 1 : 0);
+  }
+  // Relation-bearing items: bump z to host.z + 1 (after host gets its
+  // y-rank z above). Loop a second time in case a relation references
+  // another relation-bearing item.
+  for (let pass = 0; pass < 2; pass++) {
+    for (const it of sanitized) {
+      if (!it.relation) continue;
+      const host = sanitized.find((x) => x.name === it.relation!.to);
+      if (!host) continue;
+      it.z = host.z + 1;
+    }
   }
   return sanitized;
 }
@@ -179,4 +276,21 @@ function heuristicLayout(items: string[], W: number, H: number): LayoutItem[] {
 
 function clamp(n: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, n));
+}
+
+/** Validate the LLM's relation field; return null if missing or malformed. */
+function parseRelation(
+  raw: Partial<LayoutRelation> | undefined
+): LayoutRelation | null {
+  if (!raw || typeof raw !== "object") return null;
+  if (typeof raw.to !== "string" || raw.to.length === 0) return null;
+  if (
+    raw.where !== "on" &&
+    raw.where !== "above" &&
+    raw.where !== "beside" &&
+    raw.where !== "in-front"
+  ) {
+    return null;
+  }
+  return { to: raw.to, where: raw.where };
 }

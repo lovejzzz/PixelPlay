@@ -722,11 +722,32 @@ export function ScenePlayer({
   // "center"-anchored items add half their approximate sprite height.
   // pickedTick is read here to ensure re-render when a pickup happens.
   void pickedTick;
-  const depthOf = (it: PlayerSceneItem): number => {
+  // Items with a `relationTo` inherit their host's depth (so a lamp ON a
+  // nightstand draws OVER the nightstand even though the lamp's render y
+  // is visually higher). Walks at most one hop — chained relations are
+  // intentionally collapsed to avoid pathological recursion or cycles.
+  const itemById = new Map<string, PlayerSceneItem>(
+    scene.items.map((it) => [it.id, it])
+  );
+  const baseDepthOf = (it: PlayerSceneItem): number => {
     const isP = it.id === character.id;
     const ns = !isP && it.patrol ? npcStateRef.current.get(it.id) : undefined;
     const baseY = isP ? posRef.current.y : ns ? ns.y : it.y;
     return it.anchor === "bottom" ? baseY : baseY + it.scale * longest * 0.5;
+  };
+  const depthOf = (it: PlayerSceneItem): number => {
+    if (it.relationTo) {
+      const host = itemById.get(it.relationTo);
+      if (host) {
+        // "beside" sits on the same ground line — same depth as host.
+        // Other relations stack above the host (smaller bump for "in-front",
+        // bigger for "on" / "above" so the lamp draws clearly over the
+        // nightstand).
+        const bump = it.relationWhere === "beside" ? 0 : 0.5;
+        return baseDepthOf(host) + bump;
+      }
+    }
+    return baseDepthOf(it);
   };
   const sortedItems = [...scene.items]
     .filter((it) => !pickedIdsRef.current.has(it.id))

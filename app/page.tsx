@@ -146,6 +146,13 @@ type SceneItem = {
    *  by composeSceneFromAssets opt into "bottom" so trees, cabins and
    *  characters all sit on the same ground line. */
   anchor?: "bottom" | "center";
+  /** Compositional relationship to another SceneItem in the same scene.
+   *  Set by composeSceneFromAssets when /api/scene-layout returns a
+   *  relation hint (lamp on nightstand, painting above bed, etc.). The
+   *  Player's y-sort uses this to override pure-y depth so a lamp at a
+   *  visually-higher y still draws OVER its host nightstand. */
+  relationTo?: string;
+  relationWhere?: "on" | "above" | "beside" | "in-front";
   /** Special asset-less item kinds. */
   kind?: "trigger" | "light" | "emitter" | "sound";
   /** Message fired into the play-mode log when the player enters a trigger zone. */
@@ -2134,7 +2141,15 @@ export default function Home() {
     failedItems?: Array<{ name: string; error: string }>
   ) {
     const items = assetIds.map((id) => fresh[id]?.prompt || "item");
-    let layout: Array<{ name: string; x: number; y: number; scale: number; z: number }> = [];
+    type LayoutEntry = {
+      name: string;
+      x: number;
+      y: number;
+      scale: number;
+      z: number;
+      relation?: { to: string; where: "on" | "above" | "beside" | "in-front" };
+    };
+    let layout: LayoutEntry[] = [];
     try {
       const res = await fetch("/api/scene-layout", {
         method: "POST",
@@ -2180,14 +2195,30 @@ export default function Home() {
       return FLOATING_KEYWORDS.some((kw) => lower.includes(kw));
     };
 
+    // Pre-allocate SceneItem ids so relation hosts (referenced by name in
+    // the layout response) can be resolved into the matching new id.
+    const newIds = assetIds.map(() => crypto.randomUUID());
+    const nameToNewId = new Map<string, string>();
+    for (let i = 0; i < assetIds.length; i++) {
+      const name = fresh[assetIds[i]]?.prompt || "";
+      if (name) nameToNewId.set(name, newIds[i]);
+    }
+
     const sceneItems: SceneItem[] = assetIds.map((assetId, i) => {
       const placement = layout[i] || layout.find((p) => p.name === fresh[assetId]?.prompt);
       const asset = fresh[assetId];
       const isMultiFrame = (asset.cols || 1) * (asset.rows || 1) > 1;
       const itemName = asset?.prompt || "";
       const anchor: SceneItem["anchor"] = isFloating(itemName) ? "center" : "bottom";
+      // If the layout entry has a relation, resolve its host name to the
+      // matching new SceneItem id. Drop the relation if the host name
+      // doesn't match any item we generated (defensive — keeps the item
+      // placed by absolute x/y instead of crashing).
+      const hostNewId = placement?.relation?.to
+        ? nameToNewId.get(placement.relation.to)
+        : undefined;
       return {
-        id: crypto.randomUUID(),
+        id: newIds[i],
         assetId,
         x: snap(placement?.x ?? 512),
         y: snap(placement?.y ?? 512),
@@ -2202,6 +2233,9 @@ export default function Home() {
         // sit on the same ground line. Floating items (moons, lanterns,
         // birds) override to center so the y is read as their middle.
         anchor,
+        ...(hostNewId && placement?.relation
+          ? { relationTo: hostNewId, relationWhere: placement.relation.where }
+          : {}),
       };
     });
 
