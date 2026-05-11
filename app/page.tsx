@@ -121,6 +121,13 @@ type Asset = {
    *  lighting, art, toy, weapon, vehicle, other). Auto-filled by
    *  classifyAssets() after generation. */
   category?: string;
+  /** Named placement zones on this asset's surface, as bbox fractions
+   *  [0,1] of the image. Used by the relation resolver to snap an "on"-
+   *  placement to a specific named surface (top, shelf-top, etc.) when
+   *  the host has multiple. Auto-filled by anchorAssets() after
+   *  generation for surface-bearing categories (storage, seating,
+   *  table, kitchen, container); empty for everything else. */
+  anchors?: Array<{ name: string; x: number; y: number; w: number; h: number }>;
 };
 
 type ProjectStyle = {
@@ -1398,6 +1405,58 @@ export default function Home() {
     }
   }
 
+  /** Fire-and-forget anchor proposal for newly-created assets. Asks
+   *  /api/anchors to enumerate named placement zones for surface-
+   *  bearing categories (storage / seating / table / kitchen / container);
+   *  the relation resolver uses these to pick a specific snap zone
+   *  for "on" placements. Skips assets that already have anchors. */
+  async function anchorAssets(ids: string[]) {
+    if (ids.length === 0) return;
+    const ANCHOR_CATEGORIES = new Set([
+      "table", "storage", "seating", "kitchen", "container",
+    ]);
+    const targets = ids
+      .map((id) => {
+        const a = assets[id];
+        if (!a || a.anchors) return null;
+        if (!a.category || !ANCHOR_CATEGORIES.has(a.category)) return null;
+        const descriptor = (a.name || a.prompt || "").slice(0, 200);
+        return descriptor ? { id, descriptor, category: a.category } : null;
+      })
+      .filter((x): x is { id: string; descriptor: string; category: string } => !!x);
+    if (targets.length === 0) return;
+    // Issue one /api/anchors call per asset. Each is ~$0.0002. Done in
+    // parallel — typically 0-3 targets per scene, so cost is trivial.
+    const results = await Promise.all(
+      targets.map(async (t) => {
+        try {
+          const res = await fetch("/api/anchors", {
+            method: "POST",
+            headers: authHeaders(),
+            body: JSON.stringify({ descriptor: t.descriptor, category: t.category }),
+          });
+          if (!res.ok) return null;
+          const data = (await res.json()) as {
+            anchors?: Array<{ name: string; x: number; y: number; w: number; h: number }>;
+          };
+          if (!Array.isArray(data.anchors)) return null;
+          return { id: t.id, anchors: data.anchors };
+        } catch {
+          return null;
+        }
+      })
+    );
+    setAssets((a) => {
+      const next = { ...a };
+      for (const r of results) {
+        if (r && next[r.id]) {
+          next[r.id] = { ...next[r.id], anchors: r.anchors };
+        }
+      }
+      return next;
+    });
+  }
+
   /** Fire-and-forget bounds analysis for newly-created assets. Mirrors
    *  embedAssets — runs async after generation, writes the result back
    *  via setAssets. Used by the relation resolver to snap stacked items
@@ -2002,6 +2061,11 @@ export default function Home() {
       // room-type validation + surface-aware placement.
       void classifyAssets(newIds);
 
+      // Fire-and-forget multi-anchor surface proposal for surface-
+      // bearing categories (kicks in once classifyAssets has settled
+      // the category field — the helper skips uncategorized assets).
+      setTimeout(() => void anchorAssets(newIds), 2500);
+
       // Variety check for multi-frame sheets.
       if (cols * rows > 1) {
         for (const [id, asset] of Object.entries(updates)) {
@@ -2207,6 +2271,7 @@ export default function Home() {
       void embedAssets([id]);
       void analyzeBoundsForAssets([id]);
       void classifyAssets([id]);
+      setTimeout(() => void anchorAssets([id]), 2500);
       const editSpend = route.isFal
         ? (typeof data.cost === "number" ? data.cost : 0)
         : estimateImageCost(quality, "1024x1024", 1);
@@ -2368,7 +2433,8 @@ export default function Home() {
         childAsset,
         it.relationWhere,
         1024,
-        1024
+        1024,
+        { childCategory: childAsset.category }
       );
       it.x = snap(resolved.x);
       it.y = snap(resolved.y);
@@ -3546,6 +3612,7 @@ export default function Home() {
         createdAt: asset.createdAt,
         ...(asset.bounds ? { bounds: asset.bounds } : {}),
         ...(asset.category ? { category: asset.category } : {}),
+        ...(asset.anchors && asset.anchors.length > 0 ? { anchors: asset.anchors } : {}),
       });
       const cols = asset.cols || 1;
       const rows = asset.rows || 1;
@@ -3742,6 +3809,7 @@ export default function Home() {
       createdAt?: number;
       bounds?: { top: number; bottom: number; left: number; right: number };
       category?: string;
+      anchors?: Array<{ name: string; x: number; y: number; w: number; h: number }>;
     };
     const indexJson = await indexFile.async("string");
     let assetIndex: IndexEntry[];
@@ -3812,6 +3880,19 @@ export default function Home() {
           : {}),
         ...(typeof entry.category === "string" && entry.category.length > 0
           ? { category: entry.category }
+          : {}),
+        ...(Array.isArray(entry.anchors) && entry.anchors.length > 0
+          ? {
+              anchors: entry.anchors.filter(
+                (z) =>
+                  z &&
+                  typeof z.name === "string" &&
+                  typeof z.x === "number" &&
+                  typeof z.y === "number" &&
+                  typeof z.w === "number" &&
+                  typeof z.h === "number"
+              ),
+            }
           : {}),
       };
       oldIdToNewId.set(entry.id, newId);

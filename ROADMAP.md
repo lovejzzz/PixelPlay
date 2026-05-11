@@ -723,7 +723,7 @@ Strategy: six sub-systems. Each item is one cron fire, bounded diff.
 
 ### Polish
 
-- [ ] **Multi-anchor surfaces per asset (stretch)** — for assets in
+- [x] **Multi-anchor surfaces per asset (stretch)** — for assets in
       categories that conceptually have multiple usable surfaces
       (storage / seating / table / counter), add a one-time second
       chat call after generation: "looking at this descriptor, list

@@ -1,7 +1,10 @@
+import { pickAnchorFor } from "./proposeAnchors.mjs";
+
 /**
  * Surface-aware relation resolver — computes the actual (x, y, z) of a
  * SceneItem that has a `relation` to a host, using the VISIBLE bounds
- * of each item's sprite (via Asset.bounds, set by analyzeBounds) instead
+ * of each item's sprite (via Asset.bounds, set by analyzeBounds) AND
+ * named anchor zones (via Asset.anchors, set by anchorAssets) instead
  * of the scale-based estimate the server-side resolver uses.
  *
  * Why this exists: gpt-image-1 returns sprites with unpredictable
@@ -49,7 +52,8 @@ export function resolveRelation(
   childAsset,
   where,
   sceneW,
-  sceneH
+  sceneH,
+  options = {}
 ) {
   const longest = Math.max(sceneW, sceneH);
   // We treat the image cell as square in scene coords: cellSide = scale * longest.
@@ -101,9 +105,29 @@ export function resolveRelation(
 
   switch (where) {
     case "on": {
-      // Child's visible BOTTOM rests on the host's visible TOP edge,
-      // with a small downward overlap (5% of host's visible height) so
-      // the child looks anchored rather than floating.
+      // If the host has named anchor zones (set by anchorAssets for
+      // surface-bearing categories), pick the appropriate zone for the
+      // child's category and snap to its CENTER. Otherwise fall back to
+      // the bounds-derived visible top + 5% overlap.
+      const anchor = pickAnchorFor(
+        hostAsset && hostAsset.anchors,
+        options.childCategory
+      );
+      if (anchor) {
+        // anchor coordinates are bbox fractions of the host's image.
+        // Convert to scene coordinates: host image top = hImageTopY,
+        // image left = hostItem.x - hCell/2.
+        const imageLeftX = hostItem.x - hCell / 2;
+        const anchorCenterX = imageLeftX + (anchor.x + anchor.w / 2) * hCell;
+        // The anchor zone is a small horizontal strip; the child's foot
+        // sits at the TOP of the zone (just inside the host's surface).
+        const anchorTopY = hImageTopY + anchor.y * hCell;
+        x = childAnchorXForVisCenter(anchorCenterX);
+        y = childAnchorYForVisBottom(anchorTopY + anchor.h * hCell * 0.5);
+        z = hostItem.z + 1;
+        break;
+      }
+      // Bounds-derived fallback.
       const visCenterX = hVisCenterX;
       const visBottomY = hVisTopY + hVisH * 0.05;
       x = childAnchorXForVisCenter(visCenterX);
