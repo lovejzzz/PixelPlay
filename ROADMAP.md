@@ -789,7 +789,7 @@ in page.tsx (down from 9,697) — still big but much more navigable.
 Each item must keep the app working end-to-end: build clean, all
 tests pass, the test-all runner reports green.
 
-- [ ] **Extract types → app/types.ts** — pull `Asset`, `AssetType`,
+- [x] **Extract types → app/types.ts** — pull `Asset`, `AssetType`,
       `Perspective`, `Pose`, `Project`, `Scene`, `SceneItem`,
       `Prefab`, `TileLayer`, `TileGrid`, `Recipe`, `Style`, and
       friends out of page.tsx into a dedicated module. page.tsx
