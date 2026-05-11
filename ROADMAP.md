@@ -764,7 +764,7 @@ before adding more features.
       commit. The cron prompt for Phase 15+ should invoke it before
       pushing.
 
-- [ ] **Smoke test for Phase 11 share-link** — runtime test that
+- [x] **Smoke test for Phase 11 share-link** — runtime test that
       verifies the share-link upload + import flow. If
       `@vercel/blob` env vars aren't set, log a "skipped — no blob
       config" notice rather than failing; either way exit zero so
