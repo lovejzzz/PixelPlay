@@ -772,7 +772,7 @@ before adding more features.
 
 ### Bug fixes
 
-- [ ] **Fix stale-closure in enrichers** — `embedAssets`,
+- [x] **Fix stale-closure in enrichers** — `embedAssets`,
       `classifyAssets`, `analyzeBoundsForAssets`, and `anchorAssets`
       all read `assets[id]` from React closure. In the bulk
       handleSubmit path, the new asset isn't in `assets` yet

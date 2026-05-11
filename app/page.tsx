@@ -5,6 +5,7 @@ import { pixelateImageUrl } from "./lib/pixelate";
 import { analyzeBounds, buildSpriteZip, sliceSheet } from "./lib/sprites";
 import { resolveRelation } from "./lib/resolveRelation.mjs";
 import { getUnusualItemIds } from "./lib/sceneValidation.mjs";
+import { freshAsset } from "./lib/freshAsset.mjs";
 import { checkSheetVariety } from "./lib/varietyCheck";
 import { trimAlphaToContent } from "./lib/trimAlpha";
 import { idbGet, idbSet } from "./lib/storage";
@@ -1325,12 +1326,12 @@ export default function Home() {
    *  each id at call time, builds a `name + prompt + tags` text, sends
    *  one batched embed request, then writes each vector back to its
    *  asset record. Quiet failure on no-key (route returns 401). */
-  async function embedAssets(ids: string[]) {
+  async function embedAssets(ids: string[], override?: Record<string, Asset>) {
     if (ids.length === 0) return;
     // Snapshot the texts up-front so we can match indexes to ids reliably.
     const samples = ids
       .map((id) => {
-        const a = assets[id];
+        const a = freshAsset(assets, override, id) as Asset | undefined;
         if (!a || a.embedding) return null; // already embedded
         const text = [a.name || "", a.prompt || "", (a.tags || []).join(" ")]
           .filter(Boolean)
@@ -1370,11 +1371,11 @@ export default function Home() {
    *  room-type validation + surface-aware placement. Quiet failure:
    *  any error leaves category undefined and the heuristic on the
    *  server already supplies a best-effort label even without a key. */
-  async function classifyAssets(ids: string[]) {
+  async function classifyAssets(ids: string[], override?: Record<string, Asset>) {
     if (ids.length === 0) return;
     const samples = ids
       .map((id) => {
-        const a = assets[id];
+        const a = freshAsset(assets, override, id) as Asset | undefined;
         if (!a || a.category) return null;
         const text = [a.name || "", a.prompt || ""].filter(Boolean).join(". ").slice(0, 200);
         return text ? { id, text } : null;
@@ -1410,14 +1411,14 @@ export default function Home() {
    *  bearing categories (storage / seating / table / kitchen / container);
    *  the relation resolver uses these to pick a specific snap zone
    *  for "on" placements. Skips assets that already have anchors. */
-  async function anchorAssets(ids: string[]) {
+  async function anchorAssets(ids: string[], override?: Record<string, Asset>) {
     if (ids.length === 0) return;
     const ANCHOR_CATEGORIES = new Set([
       "table", "storage", "seating", "kitchen", "container",
     ]);
     const targets = ids
       .map((id) => {
-        const a = assets[id];
+        const a = freshAsset(assets, override, id) as Asset | undefined;
         if (!a || a.anchors) return null;
         if (!a.category || !ANCHOR_CATEGORIES.has(a.category)) return null;
         const descriptor = (a.name || a.prompt || "").slice(0, 200);
@@ -1464,11 +1465,11 @@ export default function Home() {
    *  of guessing height from `scale × longest`. Quiet failure: any error
    *  during canvas analysis just leaves bounds undefined, and downstream
    *  code falls back to scale-based estimates. */
-  async function analyzeBoundsForAssets(ids: string[]) {
+  async function analyzeBoundsForAssets(ids: string[], override?: Record<string, Asset>) {
     if (ids.length === 0) return;
     const targets = ids
       .map((id) => {
-        const a = assets[id];
+        const a = freshAsset(assets, override, id) as Asset | undefined;
         if (!a || a.bounds) return null;
         return a.pixelUrl ? { id, url: a.pixelUrl } : null;
       })
@@ -2048,22 +2049,31 @@ export default function Home() {
       }
       setAssets((a) => ({ ...a, ...updates }));
 
+      // Pass `updates` as the override snapshot so each enricher sees
+      // the freshly-created assets immediately. Without this override,
+      // the enrichers' closure-captured `assets` is the PRE-setAssets
+      // value and silently skips the new ids (the stale-closure bug
+      // documented in Phase 14 fire #80, fixed by Phase 15 fire #86).
       // Fire-and-forget vector indexing of the new assets so the gallery
       // search can do semantic match (~$0.0001 per asset).
-      void embedAssets(newIds);
+      void embedAssets(newIds, updates);
 
       // Fire-and-forget sprite-bounds analysis so the relation resolver
       // can snap "on" / "above" placements to the host's actual top
       // edge instead of guessing from scale.
-      void analyzeBoundsForAssets(newIds);
+      void analyzeBoundsForAssets(newIds, updates);
 
       // Fire-and-forget category labeling — feeds the Phase 14
       // room-type validation + surface-aware placement.
-      void classifyAssets(newIds);
+      void classifyAssets(newIds, updates);
 
       // Fire-and-forget multi-anchor surface proposal for surface-
       // bearing categories (kicks in once classifyAssets has settled
       // the category field — the helper skips uncategorized assets).
+      // We can't pass `updates` here directly because anchorAssets
+      // needs the AFTER-classify category, not the AFTER-setAssets-but-
+      // BEFORE-classify one. By 2.5s, React state has settled, so the
+      // closure-captured `assets` is fresh.
       setTimeout(() => void anchorAssets(newIds), 2500);
 
       // Variety check for multi-frame sheets.
