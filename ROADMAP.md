@@ -747,6 +747,91 @@ Strategy: six sub-systems. Each item is one cron fire, bounded diff.
 
 ---
 
+## Phase 15 — Stability & structural cleanup
+
+Driven by the 2026-05-11 audit: 76 features landed but `app/page.tsx`
+is 9,697 lines, three fire-and-forget enrichers have stale-closure
+bugs, no single command runs the full test suite, and Phase 11
+share/sync may not be wired in production. Pay down structural debt
+before adding more features.
+
+### Test infrastructure
+
+- [ ] **All-tests runner** — new `scripts/test-all.mjs` runs every
+      `scripts/test-fire-*.mjs` in sequence, reports total
+      pass/fail count + per-file timing, exits non-zero on any
+      failure. One command to verify system health before any
+      commit. The cron prompt for Phase 15+ should invoke it before
+      pushing.
+
+- [ ] **Smoke test for Phase 11 share-link** — runtime test that
+      verifies the share-link upload + import flow. If
+      `@vercel/blob` env vars aren't set, log a "skipped — no blob
+      config" notice rather than failing; either way exit zero so
+      the test-all runner doesn't crash on a deploy-time concern.
+
+### Bug fixes
+
+- [ ] **Fix stale-closure in enrichers** — `embedAssets`,
+      `classifyAssets`, `analyzeBoundsForAssets`, and `anchorAssets`
+      all read `assets[id]` from React closure. In the bulk
+      handleSubmit path, the new asset isn't in `assets` yet
+      (setAssets is queued), so they silently skip new IDs. Accept
+      an optional `assetMap` parameter that overrides the closure
+      read; handleSubmit passes `updates` so fresh assets are
+      visible. editAssetInline path keeps existing behavior.
+
+### Structural cleanup — extract from page.tsx
+
+Each item below moves a coherent slice OUT of page.tsx into its own
+module. The target after all 6 extractions is roughly **6,500 lines**
+in page.tsx (down from 9,697) — still big but much more navigable.
+Each item must keep the app working end-to-end: build clean, all
+tests pass, the test-all runner reports green.
+
+- [ ] **Extract types → app/types.ts** — pull `Asset`, `AssetType`,
+      `Perspective`, `Pose`, `Project`, `Scene`, `SceneItem`,
+      `Prefab`, `TileLayer`, `TileGrid`, `Recipe`, `Style`, and
+      friends out of page.tsx into a dedicated module. page.tsx
+      re-imports them. ~80 lines extracted; no behavior change.
+
+- [ ] **Extract constants → app/constants.ts** — pull `EDIT_EXAMPLES`,
+      `BLOCKER_KEYWORDS`, `FLOATING_KEYWORDS`, `MAX_HISTORY`,
+      `MAX_SPLIT_ITEMS_CLIENT`, `PROJECT_MEMORY_CAP`, etc. ~60 lines.
+
+- [ ] **Extract pure helpers → app/lib/sceneHelpers.ts** — move
+      standalone non-React functions: `defaultSolid`,
+      `defaultSolidForName`, `autoBackgroundColorForContext`,
+      `makeGrassTileDataUrl`, `makeDefaultCharacterDataUrl`,
+      `parseSize`, `readFileAsDataUrl`, `downscaleImage`, snap-
+      math helpers, etc. ~250 lines.
+
+- [ ] **Extract modal components → app/components/modals/*.tsx** —
+      SettingsModal, TrashModal, OnboardingModal, ShortcutsModal,
+      PaletteModal, the FailedItemsModal. One file per modal. ~500
+      lines.
+
+- [ ] **Extract scene/asset views → app/components/views/*.tsx** —
+      SceneHierarchy, RecipesView, PrefabLibrary, AssetCard,
+      ProjectSwitcher, ProjectStyleSection. ~700 lines.
+
+- [ ] **Extract forge panel → app/components/ForgePanel.tsx** — the
+      left-column form (prompt textarea, type/perspective/pose/
+      quality/variants/preset/refs/advanced toggle, FORGE button,
+      chat history). The biggest single extraction. ~600 lines.
+
+### Documentation
+
+- [ ] **Architecture overview in README** — 40-line section under a
+      new "## Architecture" header showing the data flow: user
+      types prompt → /api/generate → assets state → enrichers (embed
+      / classify / bounds / anchors) → composeSceneFromAssets →
+      /api/scene-layout → resolveRelation → SceneCanvas / ScenePlayer.
+      Plus a "Module map" subsection listing the lib modules and
+      what each owns. No new files; pure docs.
+
+---
+
 ## When everything in every phase is checked
 
 - Append a "ALL PHASES COMPLETE" entry to `CRON-LOG.md` with the date.
