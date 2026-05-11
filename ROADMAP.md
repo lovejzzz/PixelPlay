@@ -697,7 +697,7 @@ Strategy: six sub-systems. Each item is one cron fire, bounded diff.
 
 ### Surface-aware placement
 
-- [ ] **Surface-aware relation resolver (client-side rewrite)** — move
+- [x] **Surface-aware relation resolver (client-side rewrite)** — move
       the relation-resolution logic from `/api/scene-layout/route.ts`
       to a new client-side helper `app/lib/resolveRelation.ts` that
       can access `Asset.bounds`. Server still parses + validates the

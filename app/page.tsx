@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { pixelateImageUrl } from "./lib/pixelate";
 import { analyzeBounds, buildSpriteZip, sliceSheet } from "./lib/sprites";
+import { resolveRelation } from "./lib/resolveRelation.mjs";
 import { checkSheetVariety } from "./lib/varietyCheck";
 import { trimAlphaToContent } from "./lib/trimAlpha";
 import { idbGet, idbSet } from "./lib/storage";
@@ -2344,6 +2345,34 @@ export default function Home() {
           : {}),
       };
     });
+
+    // Phase 14: surface-aware refinement of relation-driven positions.
+    // The server's resolver placed each item using scale-based math; if
+    // EITHER the host or the child has Asset.bounds (already-analyzed
+    // visible bbox), we re-resolve client-side using real bounds for a
+    // snap-to-surface effect. Items without bounds fall through to the
+    // resolver's scale-based path so output matches the server.
+    const itemById = new Map(sceneItems.map((it) => [it.id, it]));
+    for (const it of sceneItems) {
+      if (!it.relationTo || !it.relationWhere) continue;
+      const host = itemById.get(it.relationTo);
+      if (!host) continue;
+      const hostAsset = fresh[host.assetId];
+      const childAsset = fresh[it.assetId];
+      if (!hostAsset || !childAsset) continue;
+      const resolved = resolveRelation(
+        host,
+        it,
+        hostAsset,
+        childAsset,
+        it.relationWhere,
+        1024,
+        1024
+      );
+      it.x = snap(resolved.x);
+      it.y = snap(resolved.y);
+      it.z = resolved.z;
+    }
 
     const scene: Scene = {
       id: crypto.randomUUID(),
