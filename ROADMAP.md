@@ -687,7 +687,7 @@ Strategy: six sub-systems. Each item is one cron fire, bounded diff.
       Pipe roomType back through the response and persist on the
       created Scene record (new `Scene.roomType?: string` field).
 
-- [ ] **Room-type category whitelist** — new `app/lib/roomCategories.ts`
+- [x] **Room-type category whitelist** — new `app/lib/roomCategories.ts`
       exports `ROOM_CATEGORIES: Record<RoomType, Category[]>` defining
       which item categories naturally belong in which room types
       (bedroom → bedding/lighting/decor/clothing/book/electronics;
