@@ -811,9 +811,17 @@ tests pass, the test-all runner reports green.
       PaletteModal, the FailedItemsModal. One file per modal. ~500
       lines.
 
-- [ ] **Extract scene/asset views → app/components/views/*.tsx** —
-      SceneHierarchy, RecipesView, PrefabLibrary, AssetCard,
-      ProjectSwitcher, ProjectStyleSection. ~700 lines.
+- [x] **Extract scene/asset views → app/components/views/*.tsx** —
+      ProjectSwitcher, RecipesView, ProjectStyleSection, PrefabLibrary
+      extracted in fire #91 (~416 lines). SceneHierarchy (220 lines)
+      and AssetCard (482 lines) deferred to a follow-up — too entangled
+      to do safely in one cron fire.
+- [ ] **Extract SceneHierarchy + AssetCard (follow-up)** — the two
+      bigger view components from the original Phase 15 plan.
+      SceneHierarchy lives in `app/components/views/SceneHierarchy.tsx`,
+      AssetCard in `app/components/views/AssetCard.tsx`. Use the same
+      copy-verbatim pattern as fire #91; expect a stale-callback check
+      since AssetCard takes ~20 callback props.
 
 - [ ] **Extract forge panel → app/components/ForgePanel.tsx** — the
       left-column form (prompt textarea, type/perspective/pose/
