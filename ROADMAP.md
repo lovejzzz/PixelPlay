@@ -735,7 +735,7 @@ Strategy: six sub-systems. Each item is one cron fire, bounded diff.
       surface, book → top surface, drawer-pull → side surface).
       Defensive: empty anchors fall back to the bounds-derived top.
 
-- [ ] **Snap-feedback in edit mode** — when the user drags an item in
+- [x] **Snap-feedback in edit mode** — when the user drags an item in
       `SceneCanvas` and hovers near another item's known surface
       (using its bounds), show a thin green outline on the snap
       zone. On pointerup-near-zone, the item's position is adjusted

@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { sliceSheet } from "../lib/sprites";
+import { findSnapTarget } from "../lib/findSnapTarget.mjs";
 
 export type CanvasAsset = {
   id: string;
@@ -15,6 +16,10 @@ export type CanvasAsset = {
    *  shadow ellipse (character / creature in Play mode). Kept loose
    *  (`string`) so this module stays decoupled from page.tsx's AssetType. */
   assetType?: string;
+  /** Named placement zones used by the snap-target finder during drag.
+   *  Same shape as Asset.anchors in page.tsx. Optional — assets without
+   *  anchors simply contribute no candidates. */
+  anchors?: Array<{ name: string; x: number; y: number; w: number; h: number }>;
 };
 
 export type CanvasItem = {
@@ -150,6 +155,13 @@ export function SceneCanvas({
   const [hoverId, setHoverId] = useState<string | null>(null);
   const [coords, setCoords] = useState<{ x: number; y: number } | null>(null);
   const [snapGuide, setSnapGuide] = useState<{ x?: number; y?: number } | null>(null);
+  /** Phase 14: snap-feedback overlay during drag. When the dragged
+   *  item's foot is within SURFACE_SNAP_DIST of another item's anchor
+   *  zone, this state holds the zone's rect (in scene px) so a green
+   *  outline can render over it as a placement hint. */
+  const [surfaceSnap, setSurfaceSnap] = useState<{
+    cx: number; cy: number; w: number; h: number; name: string;
+  } | null>(null);
 
   function findScroller(): HTMLElement | null {
     let el: HTMLElement | null = containerRef.current;
@@ -357,6 +369,33 @@ export function SceneCanvas({
       if (guideX !== undefined) newX = guideX;
       if (guideY !== undefined) newY = guideY;
       setSnapGuide(guideX !== undefined || guideY !== undefined ? { x: guideX, y: guideY } : null);
+      // Phase 14: surface-snap hint. If the dragged item's foot is near
+      // another item's anchor zone (set by anchorAssets for storage /
+      // seating / table / kitchen / container assets), show a green
+      // outline on the zone as a placement hint. Doesn't commit the
+      // snap yet — just visual feedback.
+      const SURFACE_SNAP_DIST = 60;
+      const snap = findSnapTarget(
+        drag.itemId,
+        newX,
+        newY,
+        scene.items,
+        assets,
+        SURFACE_SNAP_DIST,
+        scene.width,
+        scene.height
+      );
+      setSurfaceSnap(
+        snap
+          ? {
+              cx: snap.zoneCenterX,
+              cy: snap.zoneCenterY,
+              w: snap.zoneW,
+              h: snap.zoneH,
+              name: snap.anchorName,
+            }
+          : null
+      );
       if (drag.groupStart && drag.anchorX !== undefined && drag.anchorY !== undefined && onMoveItems) {
         const dx = newX - drag.anchorX;
         const dy = newY - drag.anchorY;
@@ -408,6 +447,7 @@ export function SceneCanvas({
     if (!drag) return;
     (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
     setSnapGuide(null);
+    setSurfaceSnap(null);
     if (drag.kind === "rubber") {
       const x0 = Math.min(drag.startX, drag.curX);
       const x1 = Math.max(drag.startX, drag.curX);
@@ -729,6 +769,34 @@ export function SceneCanvas({
               width: "100%",
             }}
           />
+        )}
+        {/* Phase 14: surface-snap overlay — green outline + label
+            hovering over the host's anchor zone while the user drags
+            an item nearby. Pure visual hint; the actual snap-on-
+            release is a future enhancement. */}
+        {surfaceSnap && (
+          <>
+            <div
+              className="absolute pointer-events-none border-2 border-farm-grass/90"
+              style={{
+                left: `${((surfaceSnap.cx - surfaceSnap.w / 2) / scene.width) * 100}%`,
+                top: `${((surfaceSnap.cy - surfaceSnap.h / 2) / scene.height) * 100}%`,
+                width: `${(surfaceSnap.w / scene.width) * 100}%`,
+                height: `${(surfaceSnap.h / scene.height) * 100}%`,
+                boxShadow: "0 0 6px rgba(122, 196, 96, 0.7)",
+              }}
+            />
+            <div
+              className="absolute pointer-events-none text-[10px] font-pixel text-farm-grass bg-farm-ink/80 px-1 border border-farm-grass/70"
+              style={{
+                left: `${(surfaceSnap.cx / scene.width) * 100}%`,
+                top: `${((surfaceSnap.cy - surfaceSnap.h / 2) / scene.height) * 100}%`,
+                transform: "translate(-50%, -100%)",
+              }}
+            >
+              ⤓ {surfaceSnap.name}
+            </div>
+          </>
         )}
 
         {/* Fill-rect preview — yellow tinted rectangle covering full cells. */}
