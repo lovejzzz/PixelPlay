@@ -799,7 +799,7 @@ tests pass, the test-all runner reports green.
       `BLOCKER_KEYWORDS`, `FLOATING_KEYWORDS`, `MAX_HISTORY`,
       `MAX_SPLIT_ITEMS_CLIENT`, `PROJECT_MEMORY_CAP`, etc. ~60 lines.
 
-- [ ] **Extract pure helpers → app/lib/sceneHelpers.ts** — move
+- [x] **Extract pure helpers → app/lib/sceneHelpers.ts** — move
       standalone non-React functions: `defaultSolid`,
       `defaultSolidForName`, `autoBackgroundColorForContext`,
       `makeGrassTileDataUrl`, `makeDefaultCharacterDataUrl`,
