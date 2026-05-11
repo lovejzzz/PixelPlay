@@ -806,7 +806,7 @@ tests pass, the test-all runner reports green.
       `parseSize`, `readFileAsDataUrl`, `downscaleImage`, snap-
       math helpers, etc. ~250 lines.
 
-- [ ] **Extract modal components → app/components/modals/*.tsx** —
+- [x] **Extract modal components → app/components/modals/*.tsx** —
       SettingsModal, TrashModal, OnboardingModal, ShortcutsModal,
       PaletteModal, the FailedItemsModal. One file per modal. ~500
       lines.
