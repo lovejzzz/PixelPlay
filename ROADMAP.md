@@ -795,7 +795,7 @@ tests pass, the test-all runner reports green.
       friends out of page.tsx into a dedicated module. page.tsx
       re-imports them. ~80 lines extracted; no behavior change.
 
-- [ ] **Extract constants → app/constants.ts** — pull `EDIT_EXAMPLES`,
+- [x] **Extract constants → app/constants.ts** — pull `EDIT_EXAMPLES`,
       `BLOCKER_KEYWORDS`, `FLOATING_KEYWORDS`, `MAX_HISTORY`,
       `MAX_SPLIT_ITEMS_CLIENT`, `PROJECT_MEMORY_CAP`, etc. ~60 lines.
 

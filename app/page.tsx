@@ -94,10 +94,6 @@ type AssistantMessage = {
 };
 type ChatMessage = UserMessage | AssistantMessage;
 
-/** Soft cap for the project MEMORY blob, in chars. Inspired by Hermes
- *  Agent's 2200-char limit on MEMORY.md. */
-const PROJECT_MEMORY_CAP = 2200;
-
 type RightTab = "assets" | "scenes" | "recipes";
 
 /** Concierge agent (Phase 10) — internal message representation rendered
@@ -115,94 +111,31 @@ type AgentMsg =
 
 // ----------------------------------------------------------- constants
 
-const GEN_MODES: { value: GenMode; label: string; emoji: string; hint: string }[] = [
-  { value: "item", label: "Items", emoji: "🌽", hint: "One sprite — prop, tile, building, creature, anything" },
-  { value: "character", label: "Characters", emoji: "🧑‍🌾", hint: "A single character — pose / walk-cycle options apply" },
-  { value: "scene", label: "Scenes", emoji: "🎬", hint: "Multi-asset scene: parsed into 3-8 items, composed onto a scene canvas" },
-];
+import {
+  BLOCKER_KEYWORDS,
+  CURRENT_ID_IDB_KEY,
+  EDIT_EXAMPLES,
+  FLOATING_KEYWORDS,
+  GEN_MODES,
+  GRID_PRESETS,
+  HISTORY_KEY,
+  LEGACY_ASSETS_IDB_KEY,
+  LEGACY_ASSETS_LS_KEY,
+  LEGACY_STYLE_LS_KEY,
+  MAX_HISTORY,
+  ONBOARDING_STEPS,
+  PERSPECTIVES,
+  POSES,
+  PROJECT_MEMORY_CAP,
+  PROJECTS_IDB_KEY,
+  QUALITIES,
+  SCENE_UI_IDB_KEY,
+  STYLE_PRESETS,
+  VARIANT_OPTIONS,
+} from "./constants";
 
-const PERSPECTIVES: { value: Perspective; label: string }[] = [
-  { value: "top-down", label: "Top-down" },
-  { value: "side-view", label: "2D side-view" },
-];
-
-const POSES: { value: Pose; label: string; hint: string }[] = [
-  { value: "single", label: "Single", hint: "one pose" },
-  { value: "directions", label: "Directions", hint: "facing N/E/S/W in a row" },
-  { value: "walk-cycle", label: "Walk cycle", hint: "4-frame walk anim" },
-  { value: "full-sheet", label: "Full sheet", hint: "directions × walk frames" },
-];
-
-const QUALITIES: { value: Quality; label: string; cost: string }[] = [
-  { value: "low", label: "Low", cost: "~$0.01" },
-  { value: "medium", label: "Med", cost: "~$0.04" },
-  { value: "high", label: "High", cost: "~$0.16" },
-];
-
-const STYLE_PRESETS: { value: StylePreset; label: string; hint: string }[] = [
-  { value: "cozy", label: "Cozy", hint: "Stardew-like cozy farming RPG" },
-  { value: "snes-jrpg", label: "SNES JRPG", hint: "16-bit Chrono Trigger / FF6 vibe" },
-  { value: "gameboy", label: "GameBoy", hint: "4-shade green monochrome" },
-  { value: "nes", label: "NES", hint: "8-bit blocky pixels, NES palette" },
-  { value: "monochrome", label: "Mono", hint: "high-contrast B&W pixel art" },
-];
-
-const VARIANT_OPTIONS = [1, 2, 4];
-const GRID_PRESETS = [0, 64, 96, 128];
-
-/** Per-asset-type example phrasings for the per-card ✏️ inline edit panel.
- *  Cycled as the placeholder so a new user has a fresh idea each second. */
-const EDIT_EXAMPLES: Record<AssetType, string[]> = {
-  character: [
-    "with red overalls",
-    "wearing a wizard hat",
-    "now holding a sword",
-    "in winter clothes",
-    "with a beard",
-  ],
-  item: [
-    "now broken",
-    "with sparkles",
-    "now glowing",
-    "in gold",
-    "with a ribbon",
-  ],
-  tile: [
-    "in autumn colors",
-    "with cracks",
-    "snow-covered",
-    "covered in moss",
-    "wet from rain",
-  ],
-  building: [
-    "with a chimney",
-    "windows lit at night",
-    "covered in vines",
-    "in ruins",
-    "in red brick",
-  ],
-  creature: [
-    "wearing a tiny hat",
-    "now sleeping",
-    "in a different color",
-    "with bigger eyes",
-    "with a saddle",
-  ],
-  ui: [
-    "in red instead of blue",
-    "with a glow",
-    "smaller and cleaner",
-    "with a number badge",
-  ],
-};
-
-const PROJECTS_IDB_KEY = "projects";
-const CURRENT_ID_IDB_KEY = "currentProjectId";
-/** Map of `projectId → { activeSceneId, selectedSceneItemIds }`. */
-const SCENE_UI_IDB_KEY = "sceneUi";
-const LEGACY_ASSETS_LS_KEY = "pwf:assets:v1";
-const LEGACY_ASSETS_IDB_KEY = "assets";
-const LEGACY_STYLE_LS_KEY = "pwf:project-style:v1";
+// All form-options, storage keys, caps, and keyword lists now live in
+// app/constants.ts (extracted in Phase 15 fire #88).
 
 type SceneUiByProject = Record<
   string,
@@ -629,8 +562,7 @@ export default function Home() {
   // ------------- hydration + persistence -------------
 
   // Prompt history (last 30) — recall with up/down arrow on the input.
-  const HISTORY_KEY = "pwf:prompt-history:v1";
-  const MAX_HISTORY = 30;
+  // HISTORY_KEY and MAX_HISTORY now live in app/constants.ts.
   const OPENAI_KEY_LS = "pixelplay:openai-key:v1";
   const FAL_KEY_LS = "pixelplay:fal-key:v1";
   const IMAGE_PROVIDER_LS = "pixelplay:image-provider:v1";
@@ -2164,12 +2096,8 @@ export default function Home() {
 
     // Items that visually "float" should anchor by their center, not their
     // base — otherwise a hanging lantern's cord would be pinned to the
-    // ground line. Keyword-based detection over the prompt name.
-    const FLOATING_KEYWORDS = [
-      "lantern", "moon", "sun", "cloud", "balloon", "kite", "star",
-      "bird", "bat", "ghost", "spirit", "fairy",
-      "chandelier", "ceiling", "hanging", "floating",
-    ];
+    // ground line. Keyword-based detection over the prompt name; the
+    // FLOATING_KEYWORDS list is shared from app/constants.ts.
     const isFloating = (name: string) => {
       const lower = name.toLowerCase();
       return FLOATING_KEYWORDS.some((kw) => lower.includes(kw));
@@ -5891,24 +5819,7 @@ function TrashModal({
   );
 }
 
-const ONBOARDING_STEPS = [
-  {
-    title: "1 — Forge assets with AI",
-    body: "Type a description in the FORGE panel on the left and hit Enter. Pixel Play calls your OpenAI key and returns pixel-art sprites — characters, tiles, scenes, and more.",
-  },
-  {
-    title: "2 — Drag assets into a scene",
-    body: "Switch to the Scenes tab on the right and drag any asset card onto the canvas. Resize, rotate, and layer items to build your game world.",
-  },
-  {
-    title: "3 — Play mode",
-    body: "Press the ▶ Play button to enter Play mode. Use WASD or arrow keys to walk your character around, interact with NPCs, pick up items, and step through portals.",
-  },
-  {
-    title: "4 — Add your OpenAI key",
-    body: "Click ⚙ Settings in the top-right corner and paste your OpenAI API key. Keys are stored only in your browser — never sent anywhere except api.openai.com.",
-  },
-] as const;
+// ONBOARDING_STEPS now lives in app/constants.ts.
 
 function OnboardingModal({ onClose }: { onClose: () => void }) {
   const [step, setStep] = useState(0);
@@ -9181,23 +9092,7 @@ function defaultSolidForName(name: string | undefined): boolean {
   return BLOCKER_KEYWORDS.some((k) => new RegExp(`\\b${k}\\b`, "i").test(s));
 }
 
-const BLOCKER_KEYWORDS = [
-  // Architecture / structures
-  "cabin", "house", "cottage", "shack", "hut", "building", "tower",
-  "shop", "store", "tavern", "barn", "shed", "windmill", "lighthouse",
-  // Monuments / props that occupy ground space
-  "statue", "fountain", "obelisk", "pillar", "column", "shrine",
-  "gravestone", "tombstone", "headstone", "altar",
-  // Trees / large vegetation
-  "tree", "pine", "oak", "fir", "spruce", "birch", "willow", "palm",
-  "bush", "shrub",
-  // Rocks / boulders
-  "boulder", "rock", "stone wall",
-  // Heavy interior furniture (you can walk around but not through)
-  "anvil", "workbench", "forge", "cauldron", "fireplace", "hearth",
-  "dresser", "wardrobe", "armoire", "bookshelf", "bookcase",
-  "bed", "sofa", "couch", "piano", "throne", "desk", "table",
-];
+// BLOCKER_KEYWORDS now lives in app/constants.ts.
 
 /** Procedural 32×32 grass tile so every fresh scene has visible ground
  *  even before the user generates a real tile asset. */
