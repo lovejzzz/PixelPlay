@@ -757,7 +757,7 @@ before adding more features.
 
 ### Test infrastructure
 
-- [ ] **All-tests runner** — new `scripts/test-all.mjs` runs every
+- [x] **All-tests runner** — new `scripts/test-all.mjs` runs every
       `scripts/test-fire-*.mjs` in sequence, reports total
       pass/fail count + per-file timing, exits non-zero on any
       failure. One command to verify system health before any
