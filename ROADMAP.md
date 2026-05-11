@@ -712,7 +712,7 @@ Strategy: six sub-systems. Each item is one cron fire, bounded diff.
 
 ### Validation
 
-- [ ] **Item-room validation badge** — after `composeSceneFromAssets`
+- [x] **Item-room validation badge** — after `composeSceneFromAssets`
       creates a scene, walk its items and check each asset's category
       against the scene's roomType whitelist. Items that don't match
       get a yellow "⚠ unusual for this room" badge in the hierarchy

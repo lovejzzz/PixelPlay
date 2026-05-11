@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { pixelateImageUrl } from "./lib/pixelate";
 import { analyzeBounds, buildSpriteZip, sliceSheet } from "./lib/sprites";
 import { resolveRelation } from "./lib/resolveRelation.mjs";
+import { getUnusualItemIds } from "./lib/sceneValidation.mjs";
 import { checkSheetVariety } from "./lib/varietyCheck";
 import { trimAlphaToContent } from "./lib/trimAlpha";
 import { idbGet, idbSet } from "./lib/storage";
@@ -8526,13 +8527,31 @@ function SceneHierarchy({
   const sorted = [...scene.items].sort((a, b) => b.z - a.z); // front first
   const [dragRow, setDragRow] = useState<number | null>(null);
   const [hoverRow, setHoverRow] = useState<number | null>(null);
+  // Phase 14: items whose category doesn't fit the scene's roomType.
+  // Computed each render so edits / asset re-classifications stay fresh.
+  const unusualIds = getUnusualItemIds(scene, assets) as Set<string>;
 
   if (sorted.length === 0) return null;
 
   return (
     <div className="border-2 border-farm-wood/60 bg-farm-ink/30 p-2 text-xs">
-      <div className="flex items-center justify-between mb-1">
+      <div className="flex items-center justify-between mb-1 gap-2">
         <span className="opacity-70">📋 Items ({sorted.length}) — front to back</span>
+        {unusualIds.size > 0 && (
+          <span
+            className="px-1.5 py-0.5 border border-yellow-600 text-yellow-300 text-[10px]"
+            title={`Categories that don't fit this room (${scene.roomType || "no room set"}):\n` +
+              sorted
+                .filter((it) => unusualIds.has(it.id))
+                .map((it) => {
+                  const a = assets[it.assetId];
+                  return `· ${a?.name || a?.prompt || it.id}${a?.category ? ` (${a.category})` : ""}`;
+                })
+                .join("\n")}
+          >
+            ⚠ {unusualIds.size} unusual
+          </span>
+        )}
         <span className="opacity-50 text-[10px]">drag to reorder</span>
       </div>
       <div className="space-y-0.5">
@@ -8586,8 +8605,16 @@ function SceneHierarchy({
                   className="pixelated w-6 h-6 object-contain bg-farm-ink/60 flex-shrink-0"
                 />
               )}
-              <span className="flex-1 truncate" title={a?.prompt}>
-                {a?.name || a?.prompt || "(missing asset)"}
+              <span className="flex-1 truncate flex items-center gap-1" title={a?.prompt}>
+                {unusualIds.has(it.id) && (
+                  <span
+                    className="text-yellow-400 text-[11px]"
+                    title={`Unusual for this ${scene.roomType || "scene"} — asset category "${a?.category}" isn't in the room's whitelist`}
+                  >
+                    ⚠
+                  </span>
+                )}
+                <span className="truncate">{a?.name || a?.prompt || "(missing asset)"}</span>
               </span>
               <span className="opacity-50 text-[10px] tabular-nums">
                 z{it.z} · {Math.round(it.scale * 100)}%
